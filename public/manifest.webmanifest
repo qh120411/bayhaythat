@@ -1,0 +1,17 @@
+{
+  "name": "Bẫy Hay Thật ? - Trợ Lý AI Xác Minh Dấu Hiệu Lừa Đảo",
+  "short_name": "Bẫy Hay Thật ?",
+  "description": "Trợ lý AI giúp người Việt và người cao tuổi kiểm tra, nhận diện dấu hiệu lừa đảo trực tuyến và xử lý an toàn.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f8fafc",
+  "theme_color": "#059669",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

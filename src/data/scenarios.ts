@@ -17,8 +17,11 @@ export const DEMO_SCENARIOS: DemoScenario[] = [
       text: "ALO BÁC PHẢI MẸ CHÁU HOÀNG KHÔNG? Cháu Hoàng vừa bị tai nạn giao thông trên đường Cộng Hòa, hiện đang cấp cứu hôn mê tại Bệnh viện Chợ Rẫy. Bác sĩ yêu cầu nộp tạm ứng 25.000.000đ để mổ não gấp trong 15 phút tới nếu không sẽ nguy hiểm tính mạng! Bác chuyển ngay vào STK Bác sĩ trực: 1048829103 Vietinbank (Nguyễn Văn Hùng). CẦN GẤP LẮM BÁC ƠI KHÔNG KỊP NỮA ĐÂU!!",
     },
     mockResult: {
+      finalRiskLevel: "HIGH",
       muc_rui_ro: "Rủi ro cao",
-      ket_luan_ngan: "Có dấu hiệu lừa đảo mạo danh bệnh viện cấp cứu để ép chuyển tiền gấp trong cơn hoảng loạn.",
+      ket_luan_ngan: "Có nhiều dấu hiệu đáng ngờ — không làm theo yêu cầu",
+      title: "Có nhiều dấu hiệu đáng ngờ — không làm theo yêu cầu",
+      badgeLabel: "Rủi ro cao",
       cac_dau_hieu: [
         "Tạo tình huống tai nạn, nguy kịch đến tính mạng để làm người nhà hoảng sợ tột độ.",
         "Ép buộc chuyển tiền trong thời gian cực ngắn ('trong 15 phút tới', 'không kịp nữa').",
@@ -73,8 +76,11 @@ export const DEMO_SCENARIOS: DemoScenario[] = [
       text: "[GHTK THONG BAO]: Don hang ma #VN892017 cua quy khach bi giao khong thanh cong 2 lan. De tranh bi huy don va thanh ly hang, vui long truy cap: http://ghtk-giaohang-xacnhan.top/tra-cuu-don/89201 de thanh toan 15.000d phi luu kho trong 2 gio toi.",
     },
     mockResult: {
+      finalRiskLevel: "HIGH",
       muc_rui_ro: "Rủi ro cao",
-      ket_luan_ngan: "Có dấu hiệu giả mạo đơn vị vận chuyển với đường link lừa đảo nhằm đánh cắp tài khoản ngân hàng.",
+      ket_luan_ngan: "Có nhiều dấu hiệu đáng ngờ — không làm theo yêu cầu",
+      title: "Có nhiều dấu hiệu đáng ngờ — không làm theo yêu cầu",
+      badgeLabel: "Rủi ro cao",
       cac_dau_hieu: [
         "Đường link có đuôi lạ (.top), không phải tên miền chính thức của đơn vị vận chuyển (giaohangtietkiem.vn).",
         "Số tiền phí rất nhỏ (15.000đ) nhằm kích thích người dùng bấm vào link mà không đề phòng.",
@@ -127,8 +133,11 @@ export const DEMO_SCENARIOS: DemoScenario[] = [
       text: "Đối phương gọi Zalo hiển thị hình ảnh người mặc trang phục công an, đọc đúng số CCCD và địa chỉ nhà của tôi. Nói rằng tài khoản ngân hàng của tôi đang dính vào vụ án buôn ma túy 50 tỷ của đường dây tội phạm quốc tế. Đã có lệnh bắt tạm giam từ Viện Kiểm Sát. Yêu cầu tôi phải tải ứng dụng 'Bộ Công An' để xác thực, đồng thời chuyển toàn bộ tiền tiết kiệm sang 'Tài khoản giám sát của cơ quan điều tra' để chứng minh trong sạch, và ĐẶC BIỆT KHÔNG ĐƯỢC KỂ VỚI BẤT KỲ AI.",
     },
     mockResult: {
-      muc_rui_ro: "Rủi ro cao",
-      ket_luan_ngan: "Dấu hiệu mạo danh cơ quan công an lừa đảo đe dọa tống tiền kinh điển. Tuyệt đối không làm theo!",
+      finalRiskLevel: "CRITICAL",
+      muc_rui_ro: "Rủi ro rất cao",
+      ket_luan_ngan: "Dừng lại ngay — không chuyển tiền, cung cấp OTP hoặc mở liên kết",
+      title: "Dừng lại ngay — không chuyển tiền, cung cấp OTP hoặc mở liên kết",
+      badgeLabel: "Nguy hiểm — dấu hiệu lừa đảo rõ ràng",
       cac_dau_hieu: [
         "Công an Việt Nam KHÔNG BAO GIỜ làm việc hay tống đạt lệnh bắt qua điện thoại, Zalo hay video call.",
         "Yêu cầu 'chuyển tiền vào tài khoản an toàn / tài khoản giám sát' là chiêu trò 100% lừa đảo.",

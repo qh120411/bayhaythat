@@ -1,9 +1,127 @@
-export type RiskLevel = "Chưa thấy dấu hiệu rõ ràng" | "Cần xác minh" | "Rủi ro cao" | "Chưa rõ";
+import type { CanonicalRiskLevel } from "./utils/riskConfig";
+import type { TraceCheckResult, PhoneTraceItem, DomainTraceItem } from "./utils/reputationService";
+import type {
+  IndicatorCheckResult,
+  IndicatorWarningLevel,
+  IndicatorPhoneDetail,
+  IndicatorUrlDetail,
+} from "./utils/indicatorLookup";
+import type {
+  OfficialPhoneMatch,
+  ReferencePhoneMatch,
+  PublicPhoneSearchResult,
+} from "./utils/publicPhoneGrounding";
+
+export type {
+  CanonicalRiskLevel,
+  TraceCheckResult,
+  PhoneTraceItem,
+  DomainTraceItem,
+  IndicatorCheckResult,
+  IndicatorWarningLevel,
+  IndicatorPhoneDetail,
+  IndicatorUrlDetail,
+  OfficialPhoneMatch,
+  ReferencePhoneMatch,
+  PublicPhoneSearchResult,
+};
+
+export type RiskLevel =
+  | "Chưa thấy dấu hiệu rõ ràng"
+  | "Cần thận trọng"
+  | "Cần xác minh"
+  | "Rủi ro cao"
+  | "Rủi ro rất cao"
+  | "Chưa rõ";
 
 export interface EvidenceItem {
   noi_dung: string;
   nguon: "tinh_huong_ban_dau" | "cau_tra_loi_bo_sung";
   y_nghia: string;
+}
+
+export interface TechnicalPhoneInfo {
+  raw: string;
+  normalized: string;
+  countryCode?: string;
+  countryName?: string;
+  isVietnam: boolean;
+  isForeign: boolean;
+  isSuspicious: boolean;
+  suspicionReason?: string;
+}
+
+export interface TechnicalUrlInfo {
+  raw: string;
+  normalized: string;
+  protocol: string;
+  hostname: string;
+  subdomain: string;
+  registrableDomain: string; // Tên miền đăng ký thật (e.g. eu.cc, dichvucong.gov.vn)
+  tld: string;
+  pathname: string;
+  fullPath: string;
+  hasDeceptivePath: boolean;
+  deceptiveKeywordsInPath: string[];
+  isSuspiciousTld: boolean;
+  isDirectIp: boolean;
+  isShortenedUrl: boolean;
+  explanation: string;
+}
+
+export interface TechnicalScoreBreakdown {
+  id: string;
+  sign: string;
+  points: number;
+  evidence: string;
+}
+
+export interface TechnicalAnalysisData {
+  phoneAnalysis?: {
+    hasPhone: boolean;
+    phones: TechnicalPhoneInfo[];
+    isForeignSenderWithVnIdentity: boolean;
+    summary: string;
+    details: string[];
+  };
+  urlAnalysis?: {
+    hasUrl: boolean;
+    urls: TechnicalUrlInfo[];
+    hasDomainMismatch: boolean;
+    hasPathDeception: boolean;
+    summary: string;
+    details: string[];
+  };
+  contentAnalysis?: {
+    hasUrgencyOrThreat: boolean;
+    urgencyDetails?: string;
+    hasPaymentOrMoneyDemand: boolean;
+    paymentDetails?: string;
+    hasOtpOrCredentialsDemand: boolean;
+    otpDetails?: string;
+    hasAppDownloadOrRemoteAccess: boolean;
+    appDetails?: string;
+    hasLureToReplyForNewLink: boolean;
+    lureDetails?: string;
+    hasSecrecyDemand: boolean;
+    hasFakeRewardOrInvestment: boolean;
+    detectedSignals: string[];
+  };
+  identityMismatch?: {
+    hasConflict: boolean;
+    claimedIdentity: string | null;
+    claimedType?: string;
+    senderPhoneCountry?: string;
+    actualRegistrableDomain?: string;
+    demandedAction?: string;
+    conflictDescription?: string;
+  };
+  scoring?: {
+    totalScore: number;
+    riskLevel: RiskLevel;
+    scoreBreakdown: TechnicalScoreBreakdown[];
+    verdictSummary: string;
+  };
 }
 
 export interface FollowUpQuestion {
@@ -14,6 +132,22 @@ export interface FollowUpQuestion {
 }
 
 export interface AnalysisResponse {
+  // CANONICAL SINGLE SOURCE OF RISK TRUTH
+  finalRiskLevel: CanonicalRiskLevel;
+  ruleBasedRiskLevel?: CanonicalRiskLevel;
+  aiRiskLevel?: CanonicalRiskLevel;
+  reputationRiskLevel?: CanonicalRiskLevel;
+  traceCheckResult?: TraceCheckResult;
+
+  // Canonical structured fields
+  badgeLabel?: string;
+  riskReasons?: string[];
+  immediateActions?: string[];
+  needsMoreInformation?: boolean;
+  title?: string;
+  isPreliminary?: boolean;
+
+  // Legacy compatibility fields
   muc_rui_ro: RiskLevel;
   ket_luan_ngan: string;
   bang_chung_da_co?: EvidenceItem[];
@@ -23,6 +157,9 @@ export interface AnalysisResponse {
   hanh_dong_an_toan?: string[];
   co_can_hoi_them?: boolean;
   so_luot_da_hoi?: number;
+
+  // Systematic Technical Indicators Result
+  technicalAnalysis?: TechnicalAnalysisData;
 
   // Additional fields for rich guidance and action cards
   cac_dau_hieu?: string[];
@@ -62,7 +199,7 @@ export interface ConversationTurn {
   extraNote?: string;
 }
 
-export type InputMode = "text" | "image" | "link" | "audio" | "story" | "police_call";
+export type InputMode = "text" | "indicator" | "image" | "link" | "audio" | "story" | "police_call";
 
 export interface DemoScenario {
   id: string;
@@ -106,3 +243,15 @@ export interface HotlineContact {
   desc: string;
   badge: string;
 }
+
+export interface OfficialSourceEntry {
+  id: string;
+  name: string;
+  domain: string;
+  url: string;
+  authority: string;
+  description: string;
+  isPrimaryPolicePortal?: boolean;
+}
+
+

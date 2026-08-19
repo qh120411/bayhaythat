@@ -1,5 +1,5 @@
 import React from "react";
-import { ShieldCheck, Eye, PhoneCall, HelpCircle, HeartHandshake, Sparkles, BookOpen } from "lucide-react";
+import { ShieldCheck, Eye, PhoneCall, HelpCircle, HeartHandshake, Sparkles, BookOpen, Lock } from "lucide-react";
 
 interface HeaderProps {
   isLargeFont: boolean;
@@ -7,6 +7,7 @@ interface HeaderProps {
   onOpenHotline: () => void;
   onOpenBreathing: () => void;
   onOpenArchitecture: () => void;
+  onOpenPrivacy: () => void;
   activeTab: "check" | "practice";
   onSelectTab: (tab: "check" | "practice") => void;
 }
@@ -17,6 +18,7 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenHotline,
   onOpenBreathing,
   onOpenArchitecture,
+  onOpenPrivacy,
   activeTab,
   onSelectTab,
 }) => {
@@ -117,12 +119,22 @@ export const Header: React.FC<HeaderProps> = ({
             <span className="hidden sm:inline">Tổng đài 156</span>
           </button>
 
+          {/* Privacy Policy */}
+          <button
+            id="btn-open-privacy-policy"
+            onClick={onOpenPrivacy}
+            className="p-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-600 border border-slate-200 transition-colors cursor-pointer"
+            title="Chính sách bảo mật & Quyền riêng tư"
+          >
+            <Lock className="w-4 h-4 text-slate-600" />
+          </button>
+
           {/* System Architecture info button */}
           <button
             id="btn-open-architecture-info"
             onClick={onOpenArchitecture}
             className="p-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-600 border border-slate-200 transition-colors cursor-pointer"
-            title="Hồ sơ kiến trúc kỹ thuật & Báo cáo hệ thống"
+            title="Hồ sơ kiến trúc kỹ thuật"
           >
             <HelpCircle className="w-4 h-4 text-slate-600" />
           </button>

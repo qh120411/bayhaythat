@@ -34,7 +34,7 @@ export const OFFICIAL_HOTLINES: HotlineContact[] = [
     category: "authority",
     phone: "069.234.3640",
     hours: "Giờ hành chính & Tiếp nhận trực tiếp",
-    desc: "Đơn vị chuyên trách điều tra tội phạm công nghệ cao và các đường dây lừa đảo xuyên biên giới.",
+    desc: "Đơn vị chuyên trách điều tra tội phạm công nghệ cao và các đường dây lừa đảo xuyên biên giới. Cổng thông tin: bocongan.gov.vn",
     badge: "A05 Bộ Công an",
   },
   {

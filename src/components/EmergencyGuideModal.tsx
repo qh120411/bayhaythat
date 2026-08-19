@@ -80,18 +80,39 @@ export const EmergencyGuideModal: React.FC<EmergencyGuideModalProps> = ({ isOpen
           </div>
         </div>
 
-        {/* Portal reference link */}
-        <div className="p-4 rounded-2xl bg-slate-100 border border-slate-200 text-xs text-slate-700 flex items-center justify-between gap-3 flex-wrap font-medium">
-          <span>Tra cứu website giả mạo tại Cổng An Toàn Không Gian Mạng Quốc Gia</span>
-          <a
-            href="https://tinnhiemmang.vn"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-emerald-700 font-bold hover:underline flex items-center gap-1"
-          >
-            <span>tinnhiemmang.vn</span>
-            <ExternalLink className="w-3.5 h-3.5" />
-          </a>
+        {/* Portal reference links */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs text-slate-700 font-medium">
+          <div className="p-3.5 rounded-2xl bg-rose-50/80 border border-rose-200 flex items-center justify-between gap-2">
+            <div>
+              <span className="font-bold text-rose-950 block">Cổng TTĐT Bộ Công an:</span>
+              <span className="text-2xs text-rose-800">Cảnh báo thủ đoạn tội phạm & lừa đảo</span>
+            </div>
+            <a
+              href="https://bocongan.gov.vn"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-rose-700 font-extrabold hover:underline flex items-center gap-1 shrink-0 bg-white px-2.5 py-1 rounded-lg border border-rose-200 shadow-2xs"
+            >
+              <span>bocongan.gov.vn</span>
+              <ExternalLink className="w-3 h-3" />
+            </a>
+          </div>
+
+          <div className="p-3.5 rounded-2xl bg-emerald-50/80 border border-emerald-200 flex items-center justify-between gap-2">
+            <div>
+              <span className="font-bold text-emerald-950 block">Cổng Tín nhiệm mạng Quốc gia:</span>
+              <span className="text-2xs text-emerald-800">Tra cứu danh sách website an toàn / độc hại</span>
+            </div>
+            <a
+              href="https://tinnhiemmang.vn"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-emerald-700 font-extrabold hover:underline flex items-center gap-1 shrink-0 bg-white px-2.5 py-1 rounded-lg border border-emerald-200 shadow-2xs"
+            >
+              <span>tinnhiemmang.vn</span>
+              <ExternalLink className="w-3 h-3" />
+            </a>
+          </div>
         </div>
       </div>
     </div>
