@@ -1,0 +1,6 @@
+{
+  "name": "Bẫy Hay Thật ?",
+  "description": "Trợ lý AI giúp người Việt và người cao tuổi xác minh dấu hiệu lừa đảo trực tuyến và chọn cách xử lý an toàn",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
