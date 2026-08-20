@@ -703,8 +703,8 @@ export function analyzeContentSignals(text: string): ContentAnalysisResult {
   const detectedSignals: string[] = [];
 
   // Urgency & Threats
-  const urgencyPattern = /(?:trong vòng\s+\d+\s*(?:giờ|tiếng|phút|ngày)|trong\s+\d+\s*h|hạn chót|khẩn cấp|ngay lập tức|trước\s+\d+h|bắt giữ|tạm giam|khởi tố|phong tỏa tài khoản|cắt điện|khóa sim|tăng mức phạt|hủy quà|hết hạn)/i;
-  const hasUrgencyOrThreat = urgencyPattern.test(text) || lower.includes("trong 48 giờ") || lower.includes("trong 24 giờ") || lower.includes("48h") || lower.includes("24h") || lower.includes("bắt giam");
+  const urgencyPattern = /(?:trong vòng\s+\d+\s*(?:giờ|tiếng|phút|ngày)|trong\s+\d+\s*h|hạn chót|khẩn cấp|ngay lập tức|ngay bây giờ|ngay\b|trước\s+\d+h|bắt giữ|tạm giam|khởi tố|phong tỏa tài khoản|cắt điện|khóa sim|tăng mức phạt|hủy quà|hết hạn|lệnh triệu tập|điều tra|truy nã|hầu tòa|viện kiểm sát|rửa tiền|đường dây tội phạm)/i;
+  const hasUrgencyOrThreat = urgencyPattern.test(text) || lower.includes("trong 48 giờ") || lower.includes("trong 24 giờ") || lower.includes("48h") || lower.includes("24h") || lower.includes("bắt giam") || lower.includes("triệu tập") || lower.includes("rửa tiền");
 
   let urgencyDetails: string | undefined;
   if (hasUrgencyOrThreat) {
@@ -714,8 +714,8 @@ export function analyzeContentSignals(text: string): ContentAnalysisResult {
   }
 
   // Payment / Money demand
-  const paymentPattern = /(?:thanh toán|nộp phạt|chuyển tiền|nộp tiền|đóng phí|chuyển khoản|thanh toán phạt|phí mở khóa|tiền cọc|phí bảo lưu|phí ship|tiền bảo hiểm|nạp tiền)/i;
-  const hasPaymentOrMoneyDemand = paymentPattern.test(text) || lower.includes("thanh toán phạt") || lower.includes("chuyển tiền") || lower.includes("nộp phạt");
+  const paymentPattern = /(?:thanh toán|nộp phạt|chuyển tiền|nộp tiền|đóng phí|chuyển khoản|thanh toán phạt|phí mở khóa|tiền cọc|phí bảo lưu|phí ship|tiền bảo hiểm|nạp tiền|bảo lãnh|tiền bảo lãnh|nộp\s+\d+|chuyển\s+\d+)/i;
+  const hasPaymentOrMoneyDemand = paymentPattern.test(text) || lower.includes("thanh toán phạt") || lower.includes("chuyển tiền") || lower.includes("nộp phạt") || lower.includes("bảo lãnh");
 
   let paymentDetails: string | undefined;
   if (hasPaymentOrMoneyDemand) {
@@ -794,7 +794,7 @@ export function calculateRuleBasedRisk(params: {
   claimedOrg: ClaimedIdentity | null;
   rawText: string;
 }): RuleScoreResult {
-  const { phoneAnalysis, urlAnalysis, contentAnalysis, claimedOrg } = params;
+  const { phoneAnalysis, urlAnalysis, contentAnalysis, claimedOrg, rawText = "" } = params;
   const scoreBreakdown: ScoreItem[] = [];
 
   // 1. Số nước ngoài không phù hợp danh tính tự xưng: +25 điểm
@@ -877,6 +877,21 @@ export function calculateRuleBasedRisk(params: {
       sign: "Yêu cầu cài đặt ứng dụng APK / phần mềm lạ",
       points: 35,
       evidence: contentAnalysis.appDetails || "Dấu hiệu cài mã độc điều khiển thiết bị.",
+    });
+  }
+
+  // 8. Ambiguous / Self-proclaimed caller requiring verification
+  const lowerRaw = rawText.toLowerCase();
+  const isAmbiguousCaller =
+    (lowerRaw.includes("tự xưng") || lowerRaw.includes("shipper") || lowerRaw.includes("gọi điện")) &&
+    scoreBreakdown.length === 0;
+
+  if (isAmbiguousCaller) {
+    scoreBreakdown.push({
+      id: "ambiguous_caller_verify",
+      sign: "Người lạ tự xưng danh tính cần làm rõ thông tin",
+      points: 20,
+      evidence: "Thông tin chưa đủ để kết luận ngay, cần đặt câu hỏi làm rõ để tránh phán đoán vội vàng.",
     });
   }
 
@@ -994,51 +1009,54 @@ export function mergeRuleRiskWithAiResult(
   const ruleBasedRiskLevel: CanonicalRiskLevel = techAnalysis.scoring.canonicalRiskLevel;
   let aiRiskLevel: CanonicalRiskLevel = mapStringToCanonicalRisk(aiResult?.aiRiskLevel || aiResult?.muc_rui_ro);
 
-  // Validation Rule: If risk reasons contain severe signs, it CANNOT be SAFE!
-  const severeSignalKeywords = [
-    "tên miền giả mạo",
-    "domain",
-    "số nước ngoài",
-    "giả danh",
-    "mạo danh",
-    "bộ công an",
-    "công an",
-    "ngân hàng",
-    "chuyển tiền",
-    "nộp phạt",
-    "thanh toán",
-    "otp",
-    "mật khẩu",
-    "cài ứng dụng",
-    "apk",
-    "mã độc",
-    "lừa đảo",
-  ];
-
-  const allReasonsText = [
-    ...(aiResult?.riskReasons || []),
-    ...(aiResult?.cac_dau_hieu || []),
-    ...(aiResult?.bang_chung || []),
-    ...(techAnalysis.scoring.scoreBreakdown.map((s) => s.sign)),
-    techAnalysis.scoring.verdictSummary,
-    aiResult?.giai_thich || "",
-  ].join(" ").toLowerCase();
-
-  const hasSevereSignals = severeSignalKeywords.some((kw) => allReasonsText.includes(kw)) ||
+  // 1. Structured detection of severe threats (Non-downgrade rule)
+  const hasSevereThreatSignals =
+    techAnalysis.scoring.totalScore >= 20 ||
     techAnalysis.phoneAnalysis.isForeignSenderWithVnIdentity ||
     techAnalysis.urlAnalysis.hasDomainMismatch ||
     techAnalysis.urlAnalysis.hasPathDeception ||
+    techAnalysis.urlAnalysis.urls.some((u) => u.isSuspiciousTld || u.isDirectIp || u.isShortenedUrl || u.hasDeceptivePath) ||
     techAnalysis.contentAnalysis.hasPaymentOrMoneyDemand ||
     techAnalysis.contentAnalysis.hasOtpOrCredentialsDemand ||
-    techAnalysis.contentAnalysis.hasAppDownloadOrRemoteAccess;
+    techAnalysis.contentAnalysis.hasAppDownloadOrRemoteAccess ||
+    techAnalysis.identityMismatch.hasConflict;
 
-  if (hasSevereSignals && aiRiskLevel === "SAFE") {
-    aiRiskLevel = ruleBasedRiskLevel !== "SAFE" ? ruleBasedRiskLevel : "HIGH";
+  // 2. Structured detection of truly benign inputs (SAFE rule)
+  // All conditions must be satisfied:
+  // - technicalScore < 20
+  // - no suspicious signals (scoreBreakdown is empty)
+  // - no payment, OTP, password, or app installation demand
+  // - no urgency or threat
+  // - no lure to reply for link
+  // - no suspicious URL or phone
+  // - no identity conflict
+  const isTrulyBenign =
+    techAnalysis.scoring.totalScore < 20 &&
+    techAnalysis.scoring.scoreBreakdown.length === 0 &&
+    !techAnalysis.contentAnalysis.hasPaymentOrMoneyDemand &&
+    !techAnalysis.contentAnalysis.hasOtpOrCredentialsDemand &&
+    !techAnalysis.contentAnalysis.hasAppDownloadOrRemoteAccess &&
+    !techAnalysis.contentAnalysis.hasUrgencyOrThreat &&
+    !techAnalysis.contentAnalysis.hasLureToReplyForNewLink &&
+    !techAnalysis.identityMismatch.hasConflict &&
+    (!techAnalysis.urlAnalysis.hasUrl ||
+      (!techAnalysis.urlAnalysis.hasDomainMismatch &&
+        !techAnalysis.urlAnalysis.hasPathDeception &&
+        !techAnalysis.urlAnalysis.urls.some((u) => u.isSuspiciousTld || u.isDirectIp || u.isShortenedUrl || u.hasDeceptivePath))) &&
+    (!techAnalysis.phoneAnalysis.hasPhone ||
+      (!techAnalysis.phoneAnalysis.isForeignSenderWithVnIdentity &&
+        !techAnalysis.phoneAnalysis.phones.some((p) => p.isSuspicious || p.isForeign)));
+
+  let finalRiskLevel: CanonicalRiskLevel;
+  if (isTrulyBenign) {
+    // Force SAFE/LOW when all technical and content criteria confirm benign nature
+    finalRiskLevel = "SAFE";
+  } else if (hasSevereThreatSignals && aiRiskLevel === "SAFE") {
+    // Never allow AI to downgrade when severe threats are detected
+    finalRiskLevel = ruleBasedRiskLevel !== "SAFE" ? ruleBasedRiskLevel : "HIGH";
+  } else {
+    finalRiskLevel = maxRisk(ruleBasedRiskLevel, aiRiskLevel);
   }
-
-  // Canonical Non-Downgrade Rule:
-  // finalRiskLevel = max(ruleBasedRiskLevel, aiRiskLevel)
-  const finalRiskLevel: CanonicalRiskLevel = maxRisk(ruleBasedRiskLevel, aiRiskLevel);
 
   // Canonical UI metadata from single source of truth
   const canonicalUI = CANONICAL_RISK_UI[finalRiskLevel];
@@ -1050,11 +1068,11 @@ export function mergeRuleRiskWithAiResult(
     finalRiskLevel === "HIGH";
 
   // Build high-priority immediate actions
-  const primaryActions: string[] = [
-    ...(canonicalUI.defaultActions),
-  ];
+  let primaryActions: string[] = [...(canonicalUI.defaultActions)];
 
-  if (techAnalysis.contentAnalysis.hasLureToReplyForNewLink) {
+  if (finalRiskLevel === "SAFE") {
+    primaryActions = ["Nếu nội dung hoặc yêu cầu thay đổi, hãy kiểm tra lại trước khi thực hiện giao dịch."];
+  } else if (techAnalysis.contentAnalysis.hasLureToReplyForNewLink) {
     primaryActions.unshift("KHÔNG trả lời tin nhắn (không soạn '1', 'Y' hay bất kỳ ký tự nào) để tránh bị gửi thêm liên kết độc hại.");
   }
 
@@ -1112,7 +1130,9 @@ export function mergeRuleRiskWithAiResult(
     title: canonicalUI.fixedTitle,
     badgeLabel: canonicalUI.badgeLabel,
     riskReasons: aiResult?.riskReasons || techAnalysis.scoring.scoreBreakdown.map((s) => s.sign),
+    cac_dau_hieu: aiResult?.cac_dau_hieu || techAnalysis.scoring.scoreBreakdown.map((s) => s.sign),
     immediateActions: primaryActions,
+    hanh_dong_an_toan: primaryActions,
     needsMoreInformation: shouldSkipQuestions ? false : Boolean(aiResult?.needsMoreInformation || aiResult?.co_can_hoi_them),
     co_can_hoi_them: shouldSkipQuestions ? false : Boolean(aiResult?.co_can_hoi_them || aiResult?.needsMoreInformation),
     cau_hoi_bo_sung: shouldSkipQuestions ? [] : aiResult?.cau_hoi_bo_sung || aiResult?.followUpQuestions || [],

@@ -355,24 +355,36 @@ Khuyến nghị: ${result.recommendedActions.join(" | ")}`;
               <span className="text-xs text-slate-600 font-medium">Số lượt phản ánh:</span>
               <span
                 className={`px-2 py-0.5 rounded font-black text-xs ${
-                  result.communityReports.hasReports
+                  result.communityReports.hasReports && result.communityReports.reportCount !== null
                     ? "bg-rose-100 text-rose-800"
                     : "bg-slate-100 text-slate-800"
                 }`}
               >
-                {result.communityReports.reportCount} lượt
+                {result.communityReports.hasReports && result.communityReports.reportCount !== null
+                  ? `${result.communityReports.reportCount} lượt`
+                  : result.communityReports.reportCount === 0
+                  ? "0 lượt (nguồn đã kiểm tra)"
+                  : "Không khả dụng"}
               </span>
             </div>
 
             <div className="flex items-center justify-between gap-2 border-b border-slate-100 pb-2">
-              <span className="text-xs text-slate-600 font-medium">Ghi nhận gần nhất:</span>
+              <span className="text-xs text-slate-600 font-medium">Nguồn đối soát & Thời điểm:</span>
               <span className="text-xs font-bold text-slate-800">
-                {result.communityReports.lastReportText}
+                {result.communityReports.hasReports && result.communityReports.reportCount !== null
+                  ? result.communityReports.lastReportText || "Đã đối soát"
+                  : result.communityReports.reportCount === 0
+                  ? "Đã đối soát nguồn chính thức"
+                  : "Chưa kết nối nguồn"}
               </span>
             </div>
 
             <p className="text-xs font-semibold text-slate-800 leading-relaxed">
-              {result.communityReports.message}
+              {result.communityReports.hasReports && result.communityReports.reportCount !== null
+                ? result.communityReports.message
+                : result.communityReports.reportCount === 0
+                ? "Nguồn dữ liệu đã được kiểm tra và chưa ghi nhận báo cáo."
+                : "Chưa kết nối nguồn dữ liệu phản ánh cộng đồng đã được xác thực."}
             </p>
           </div>
         </div>

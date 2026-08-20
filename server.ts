@@ -16,6 +16,10 @@ import {
   enrichIndicatorWithGrounding,
 } from "./src/utils/indicatorLookup";
 import {
+  sanitizeSensitiveData,
+  getRedactionSummary,
+} from "./src/utils/privacySanitizer";
+import {
   searchPhoneWithGoogleGrounding,
   normalizePhoneToE164,
   normalizePhoneNumber,
@@ -30,10 +34,40 @@ import {
 dotenv.config();
 
 const app = express();
-const PORT = 3000;
+const PORT = Number(process.env.PORT) || 3000;
 
 // Disable Express X-Powered-By header
 app.disable("x-powered-by");
+
+// Trust first proxy hop (Cloud Run / NGINX reverse proxy) so req.ip and rate-limiter obtain real client IP
+app.set("trust proxy", 1);
+
+// Block direct access to sensitive system, source, and environment files
+app.use((req: Request, res: Response, next: NextFunction) => {
+  const normalizedPath = req.path.toLowerCase();
+
+  // Sensitive root configs, server code, environment files, and tests are always blocked
+  if (
+    normalizedPath.includes(".env") ||
+    normalizedPath.includes("server.ts") ||
+    normalizedPath.includes("server.cjs") ||
+    normalizedPath.endsWith(".map") ||
+    normalizedPath.includes("package.json") ||
+    normalizedPath.includes("tsconfig") ||
+    normalizedPath.includes("dockerfile") ||
+    normalizedPath.startsWith("/tests/") ||
+    normalizedPath.startsWith("/e2e/")
+  ) {
+    return res.status(404).send("Not Found");
+  }
+
+  // In production mode, also block any direct requests to /src/
+  if (process.env.NODE_ENV === "production" && normalizedPath.startsWith("/src/")) {
+    return res.status(404).send("Not Found");
+  }
+
+  next();
+});
 
 // Security Headers Middleware
 app.use((_req: Request, res: Response, next: NextFunction) => {
@@ -43,6 +77,7 @@ app.use((_req: Request, res: Response, next: NextFunction) => {
     "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://fonts.googleapis.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: https:; media-src 'self' data: blob:; connect-src 'self' https://generativelanguage.googleapis.com; frame-ancestors 'self' https://*.google.com https://*.googleusercontent.com https://*.aistudio.google.com https://*.run.app;"
   );
   res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "SAMEORIGIN");
   res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
   res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
   res.setHeader("Permissions-Policy", "camera=(self), microphone=(self), geolocation=()");
@@ -53,7 +88,96 @@ app.use((_req: Request, res: Response, next: NextFunction) => {
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
-// In-memory rate limiter for /api/analyze (30 requests per minute per IP)
+// Helper to validate MIME and magic bytes for base64 uploads
+function isValidBase64Media(
+  base64Data: string,
+  declaredMimeType: string,
+  allowedMimes: string[]
+): boolean {
+  if (!base64Data || !declaredMimeType) return false;
+  const normalizedMime = declaredMimeType.toLowerCase().trim();
+  if (!allowedMimes.includes(normalizedMime)) return false;
+
+  try {
+    const cleanBase64 = base64Data.replace(/^data:[^;]+;base64,/, "");
+    // Check max size: Image max 5MB (~6.8MB base64), Audio max 8MB (~10.9MB base64)
+    if (normalizedMime.startsWith("image/") && cleanBase64.length > 5 * 1024 * 1024 * 1.37) return false;
+    if (normalizedMime.startsWith("audio/") && cleanBase64.length > 8 * 1024 * 1024 * 1.37) return false;
+
+    // Read first 64 bytes for deep magic byte inspection
+    let headerBuffer: Buffer | null = Buffer.from(cleanBase64.substring(0, 88), "base64");
+    if (headerBuffer.length < 12) {
+      headerBuffer = null;
+      return false;
+    }
+
+    const hex = headerBuffer.toString("hex").toLowerCase();
+    const ascii = headerBuffer.toString("latin1");
+
+    let isValid = false;
+
+    if (normalizedMime.startsWith("image/")) {
+      // JPEG: ffd8ff
+      if (normalizedMime === "image/jpeg" && hex.startsWith("ffd8ff")) isValid = true;
+      // PNG: 89504e470d0a1a0a
+      else if (normalizedMime === "image/png" && hex.startsWith("89504e47")) isValid = true;
+      // WebP: RIFF at offset 0 (hex 52494646) and WEBP at offset 8 (hex 57454250)
+      else if (
+        normalizedMime === "image/webp" &&
+        hex.startsWith("52494646") &&
+        ascii.substring(8, 12) === "WEBP"
+      ) {
+        isValid = true;
+      }
+      // GIF: GIF87a or GIF89a (47494638)
+      else if (normalizedMime === "image/gif" && hex.startsWith("47494638")) isValid = true;
+    } else if (normalizedMime.startsWith("audio/")) {
+      // WAV: RIFF at offset 0 (hex 52494646) and WAVE at offset 8 (hex 57415645)
+      if (
+        normalizedMime === "audio/wav" &&
+        hex.startsWith("52494646") &&
+        ascii.substring(8, 12) === "WAVE"
+      ) {
+        isValid = true;
+      }
+      // MP3: ID3 (494433) or MPEG sync frame (fffb / fff3 / fff2)
+      else if (
+        (normalizedMime === "audio/mpeg" || normalizedMime === "audio/mp3") &&
+        (hex.startsWith("494433") || hex.startsWith("fff"))
+      ) {
+        isValid = true;
+      }
+      // OGG: OggS at offset 0 (hex 4f676753)
+      else if (normalizedMime === "audio/ogg" && hex.startsWith("4f676753")) {
+        isValid = true;
+      }
+      // M4A / MP4 / AAC: contains 'ftyp' box signature at offset 4..8 (hex 66747970)
+      else if (
+        (normalizedMime === "audio/mp4" || normalizedMime === "audio/x-m4a" || normalizedMime === "audio/aac") &&
+        ascii.includes("ftyp")
+      ) {
+        isValid = true;
+      }
+      // WebM audio: 1a45dfa3 (EBML ID)
+      else if (normalizedMime === "audio/webm" && hex.startsWith("1a45dfa3")) {
+        isValid = true;
+      }
+    }
+
+    // Explicitly nullify buffer reference to assist V8 garbage collection
+    headerBuffer = null;
+    return isValid;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * In-memory rate limiter for API endpoints (30 requests per minute per client IP)
+ * NOTE: For multi-instance Cloud Run deployments with independent scaling containers,
+ * in-memory rate limiting applies per instance. For cluster-wide global rate limiting,
+ * integrate a central Redis/Memcached or Cloud Armor policy.
+ */
 interface RateLimitRecord {
   count: number;
   resetTime: number;
@@ -61,7 +185,7 @@ interface RateLimitRecord {
 const rateLimitMap = new Map<string, RateLimitRecord>();
 
 function checkRateLimit(req: Request, res: Response, next: NextFunction) {
-  const ip = (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.socket.remoteAddress || "unknown-ip";
+  const ip = (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() || req.ip || req.socket.remoteAddress || "unknown-ip";
   const now = Date.now();
   const windowMs = 60 * 1000; // 1 minute
   const maxRequests = 30;
@@ -73,7 +197,6 @@ function checkRateLimit(req: Request, res: Response, next: NextFunction) {
   }
 
   if (record.count >= maxRequests) {
-    console.warn(`[Security RateLimit] IP ${ip} exceeded rate limit.`);
     return res.status(429).json({
       error: "Quá nhiều yêu cầu phân tích trong thời gian ngắn. Vui lòng chờ 1 phút trước khi thử lại.",
     });
@@ -82,6 +205,15 @@ function checkRateLimit(req: Request, res: Response, next: NextFunction) {
   record.count += 1;
   next();
 }
+
+// Liveness & Readiness Healthcheck Endpoints for Cloud Run & Container Orchestration
+app.get("/health", (_req: Request, res: Response) => {
+  res.status(200).json({ status: "ok" });
+});
+
+app.get("/api/health", (_req: Request, res: Response) => {
+  res.status(200).json({ status: "ok" });
+});
 
 // Clean up stale rate limit entries periodically
 setInterval(() => {
@@ -110,15 +242,6 @@ function getAiClient(): GoogleGenAI {
   }
   return aiClient;
 }
-
-// Health check endpoint
-app.get("/api/health", (_req: Request, res: Response) => {
-  res.json({
-    status: "ok",
-    timestamp: new Date().toISOString(),
-    aiConfigured: !!process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== "MY_GEMINI_API_KEY",
-  });
-});
 
 // Explicit Static Routes for SEO & PWA files
 const publicDir = path.join(process.cwd(), "public");
@@ -205,6 +328,27 @@ app.post("/api/analyze", checkRateLimit, async (req: Request, res: Response) => 
 
     if (!effectiveText && !imageBase64 && !audioBase64 && !effectiveLink && (!newAnswers || newAnswers.length === 0)) {
       return res.status(400).json({ error: "Vui lòng cung cấp nội dung, hình ảnh, liên kết hoặc câu trả lời cần phân tích." });
+    }
+
+    // Input length limit check (prevent Denial-of-Service or buffer exhaustion)
+    if (effectiveText.length > 10000 || effectiveLink.length > 2000 || (extraNote && extraNote.length > 3000)) {
+      return res.status(400).json({ error: "Nội dung cung cấp vượt quá độ dài tối đa cho phép." });
+    }
+
+    // Validate image format & magic bytes if image provided
+    if (imageBase64 && imageMimeType) {
+      const allowedImageMimes = ["image/jpeg", "image/png", "image/webp", "image/gif"];
+      if (!isValidBase64Media(imageBase64, imageMimeType, allowedImageMimes)) {
+        return res.status(400).json({ error: "Định dạng hình ảnh không hợp lệ hoặc kích thước vượt quá giới hạn." });
+      }
+    }
+
+    // Validate audio format & magic bytes if audio provided
+    if (audioBase64 && audioMimeType) {
+      const allowedAudioMimes = ["audio/mpeg", "audio/mp3", "audio/wav", "audio/ogg", "audio/mp4", "audio/x-m4a", "audio/aac", "audio/webm"];
+      if (!isValidBase64Media(audioBase64, audioMimeType, allowedAudioMimes)) {
+        return res.status(400).json({ error: "Định dạng âm thanh không hợp lệ hoặc kích thước vượt quá giới hạn." });
+      }
     }
 
     // 1. GIAI ĐOẠN 1: SYSTEMATIC TECHNICAL SCAN (Instant Rule-based Guardrails)
@@ -301,10 +445,14 @@ QUY TẮC PHÒNG VỆ (RULE-BASED GUARDRAIL):
       });
     }
 
+    // Sanitize user inputs to protect CCCD, OTP, bank account, and card numbers from raw AI exposure
+    const { sanitizedText, redactionCount, redactedItems } = sanitizeSensitiveData(effectiveText);
+    const sanitizedExtraNote = extraNote ? sanitizeSensitiveData(extraNote).sanitizedText : "";
+
     // Build lightweight prompt context with pre-extracted facts
     let promptContext = `PHÂN TÍCH TÌNH HUỐNG (Lượt ${currentTurn}/2):\n`;
     if (effectiveLink) promptContext += `- Link: ${effectiveLink}\n`;
-    if (effectiveText) promptContext += `- Nội dung: ${effectiveText}\n`;
+    if (sanitizedText) promptContext += `- Nội dung: ${sanitizedText}\n`;
 
     if (techSummaryLines.length > 0) {
       promptContext += `\n[DỮ LIỆU KỸ THUẬT ĐÃ TRÍCH XUẤT]:\n${techSummaryLines.join("\n")}\n`;
@@ -313,115 +461,145 @@ QUY TẮC PHÒNG VỆ (RULE-BASED GUARDRAIL):
     if (newAnswers && newAnswers.length > 0) {
       promptContext += `\n[CÂU TRẢ LỜI MỚI]:\n`;
       newAnswers.forEach((ans: any, idx: number) => {
-        promptContext += `${idx + 1}. ${ans.question} -> ${ans.answer}\n`;
+        const sanitizedAns = sanitizeSensitiveData(ans.answer || "").sanitizedText;
+        promptContext += `${idx + 1}. ${ans.question} -> ${sanitizedAns}\n`;
       });
     }
 
-    if (extraNote) {
-      promptContext += `\n[GHI CHÚ]: ${extraNote}\n`;
+    if (sanitizedExtraNote) {
+      promptContext += `\n[GHI CHÚ]: ${sanitizedExtraNote}\n`;
     }
 
     promptContext += `\nTrả về JSON với aiRiskLevel: SAFE | VERIFY | HIGH | CRITICAL.`;
     contentsParts.push({ text: promptContext });
 
-    // Call standard Gemini Flash model with 20-second fallback race
-    const generateAiPromise = ai.models.generateContent({
-      model: "gemini-3.7-flash",
-      contents: { parts: contentsParts },
-      config: {
-        systemInstruction,
-        responseMimeType: "application/json",
-        maxOutputTokens: 1200,
-        thinkingConfig: {
-          thinkingBudget: 0,
-        },
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            aiRiskLevel: {
-              type: Type.STRING,
-              description: "SAFE | VERIFY | HIGH | CRITICAL",
-            },
-            muc_rui_ro: {
-              type: Type.STRING,
-              description: "Mức rủi ro tiếng Việt tương ứng",
-            },
-            riskReasons: {
-              type: Type.ARRAY,
-              items: { type: Type.STRING },
-              description: "Danh sách lý do và dấu hiệu rủi ro",
-            },
-            immediateActions: {
-              type: Type.ARRAY,
-              items: { type: Type.STRING },
-              description: "Hành động an toàn tức thì",
-            },
-            needsMoreInformation: {
-              type: Type.BOOLEAN,
-              description: "Có cần hỏi thêm thông tin hay không",
-            },
-            followUpQuestions: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  id: { type: Type.STRING },
-                  cau_hoi: { type: Type.STRING },
-                  loai_tra_loi: { type: Type.STRING },
-                  cac_lua_chon: {
-                    type: Type.ARRAY,
-                    items: { type: Type.STRING },
-                  },
-                },
-                required: ["id", "cau_hoi", "loai_tra_loi"],
-              },
-            },
-            giai_thich: {
-              type: Type.STRING,
-              description: "Giải thích bản chất thủ đoạn",
-            },
-            canh_bao_phong_ngua: {
-              type: Type.STRING,
-              description: "Khuyến cáo phòng ngừa",
-            },
-            tin_nhan_tu_choi_goi_y: {
-              type: Type.STRING,
-              description: "Tin nhắn từ chối",
-            },
-            cau_hoi_xac_minh_goi_y: {
-              type: Type.STRING,
-              description: "Câu hỏi đối chứng",
-            },
-            noi_dung_gui_nguoi_than: {
-              type: Type.STRING,
-              description: "Nội dung gửi người thân",
-            },
-          },
-          required: ["aiRiskLevel", "riskReasons", "immediateActions", "needsMoreInformation"],
-        },
-      },
-    });
-
-    const timeoutPromise = new Promise((_, reject) =>
-      setTimeout(() => reject(new Error("AI_TIMEOUT")), 20000)
+    const hasValidApiKey = Boolean(
+      process.env.GEMINI_API_KEY &&
+      process.env.GEMINI_API_KEY !== "MY_GEMINI_API_KEY" &&
+      process.env.GEMINI_API_KEY !== "dummy-key" &&
+      process.env.GEMINI_API_KEY.trim().length > 5
     );
 
     let parsedAiResult: any = null;
 
-    try {
-      const aiResponse: any = await Promise.race([generateAiPromise, timeoutPromise]);
-      const responseText = aiResponse?.text;
-      if (responseText) {
-        parsedAiResult = JSON.parse(responseText);
+    if (hasValidApiKey) {
+      const responseSchema = {
+        type: Type.OBJECT,
+        properties: {
+          aiRiskLevel: {
+            type: Type.STRING,
+            description: "SAFE | VERIFY | HIGH | CRITICAL",
+          },
+          muc_rui_ro: {
+            type: Type.STRING,
+            description: "Mức rủi ro tiếng Việt tương ứng",
+          },
+          riskReasons: {
+            type: Type.ARRAY,
+            items: { type: Type.STRING },
+            description: "Danh sách lý do và dấu hiệu rủi ro",
+          },
+          immediateActions: {
+            type: Type.ARRAY,
+            items: { type: Type.STRING },
+            description: "Hành động an toàn tức thì",
+          },
+          needsMoreInformation: {
+            type: Type.BOOLEAN,
+            description: "Có cần hỏi thêm thông tin hay không",
+          },
+          followUpQuestions: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                id: { type: Type.STRING },
+                cau_hoi: { type: Type.STRING },
+                loai_tra_loi: { type: Type.STRING },
+                cac_lua_chon: {
+                  type: Type.ARRAY,
+                  items: { type: Type.STRING },
+                },
+              },
+              required: ["id", "cau_hoi", "loai_tra_loi"],
+            },
+          },
+          giai_thich: {
+            type: Type.STRING,
+            description: "Giải thích bản chất thủ đoạn",
+          },
+          canh_bao_phong_ngua: {
+            type: Type.STRING,
+            description: "Khuyến cáo phòng ngừa",
+          },
+          tin_nhan_tu_choi_goi_y: {
+            type: Type.STRING,
+            description: "Tin nhắn từ chối",
+          },
+          cau_hoi_xac_minh_goi_y: {
+            type: Type.STRING,
+            description: "Câu hỏi đối chứng",
+          },
+          noi_dung_gui_nguoi_than: {
+            type: Type.STRING,
+            description: "Nội dung gửi người thân",
+          },
+        },
+        required: ["aiRiskLevel", "riskReasons", "immediateActions", "needsMoreInformation"],
+      };
+
+      // Model priority list: try fast, high-quota gemini-2.5-flash first, then flash-lite / 3.7-flash
+      const candidateModels = ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-3.7-flash"];
+      for (const modelName of candidateModels) {
+        try {
+          const generateAiPromise = ai.models.generateContent({
+            model: modelName,
+            contents: { parts: contentsParts },
+            config: {
+              systemInstruction,
+              responseMimeType: "application/json",
+              maxOutputTokens: 1200,
+              responseSchema,
+            },
+          });
+
+          const timeoutPromise = new Promise((_, reject) =>
+            setTimeout(() => reject(new Error("AI_TIMEOUT")), 5000)
+          );
+
+          const aiResponse: any = await Promise.race([generateAiPromise, timeoutPromise]);
+          const responseText = aiResponse?.text;
+          if (responseText) {
+            parsedAiResult = JSON.parse(responseText);
+            break; // Success!
+          }
+        } catch (aiErr: any) {
+          const rawMsg = aiErr?.message || String(aiErr);
+          const isQuota = rawMsg.includes("429") || rawMsg.includes("RESOURCE_EXHAUSTED") || rawMsg.includes("quota");
+          if (isQuota) {
+            console.warn(`[AI Note] Model ${modelName} rate limit/quota reached. Checking fallback model...`);
+            continue;
+          }
+          console.warn(`[AI Note] Model ${modelName} error or timeout: ${rawMsg.slice(0, 120)}`);
+          continue;
+        }
       }
-    } catch (aiErr: any) {
-      console.warn(`[AI Note] Gemini response timeout or error (${aiErr?.message || aiErr}). Using deterministic technical analysis engine.`);
+
+      if (!parsedAiResult) {
+        console.warn("[AI Note] Using deterministic multi-layer rule engine fallback.");
+      }
+    } else {
+      console.log("[Server] GEMINI_API_KEY not present or placeholder. Using deterministic multi-layer rule engine.");
       parsedAiResult = null;
     }
 
     // Merge rule-based engine with AI result and enforce canonical single source of risk
     const finalResult = mergeRuleRiskWithAiResult(techAnalysis, parsedAiResult || {});
-    return res.json(finalResult);
+    return res.json({
+      ...finalResult,
+      isSanitized: redactionCount > 0,
+      redactionSummary: getRedactionSummary(redactedItems),
+    });
   } catch (error: any) {
     console.error("[API Error] Analysis error:", error.message || error);
     const techAnalysis = runTechnicalAnalysis({
@@ -585,8 +763,9 @@ export function generateFallbackAnalysis(params: {
 
   // CASE 1: High/Very High Risk from Technical Analysis or Severe Danger
   if (techAnalysis.scoring.totalScore >= 40 || ruleScan.hasSevereDanger) {
+    const defaultRisk = techAnalysis.scoring.totalScore >= 70 || ruleScan.hasSevereDanger ? "Rủi ro rất cao" : "Rủi ro cao";
     const rawFallback = {
-      muc_rui_ro: techAnalysis.scoring.riskLevel,
+      muc_rui_ro: techAnalysis.scoring.totalScore >= 40 ? techAnalysis.scoring.riskLevel : defaultRisk,
       ket_luan_ngan: techAnalysis.scoring.totalScore >= 70
         ? "Rủi ro rất cao — có nhiều dấu hiệu giả mạo và phishing rõ ràng."
         : "Phát hiện dấu hiệu lừa đảo với mức độ rủi ro cao. Tuyệt đối không làm theo yêu cầu của đối phương.",
@@ -630,45 +809,52 @@ export function generateFallbackAnalysis(params: {
   // Check for normal benign messages
   const lowerText = text.toLowerCase();
   const isBenignMessage =
-    (lowerText.includes("họp") || lowerText.includes("cơm") || lowerText.includes("ăn tối") || lowerText.includes("chúc mừng sinh nhật") || lowerText.includes("đi chơi") || lowerText.includes("mai gặp")) &&
+    (lowerText.includes("họp") || lowerText.includes("cơm") || lowerText.includes("về trễ") || lowerText.includes("ăn tối") || lowerText.includes("chúc mừng sinh nhật") || lowerText.includes("đi chơi") || lowerText.includes("mai gặp")) &&
     !lowerText.includes("tiền") &&
     !lowerText.includes("link") &&
     !lowerText.includes("otp") &&
     !lowerText.includes("ngân hàng") &&
     !lowerText.includes("công an");
 
-  if (isBenignMessage) {
-    return {
+  if (
+    isBenignMessage ||
+    (techAnalysis.scoring.totalScore < 20 &&
+      techAnalysis.scoring.scoreBreakdown.length === 0 &&
+      !ruleScan.hasSevereDanger &&
+      !lowerText.includes("công an") &&
+      !lowerText.includes("tiền") &&
+      !lowerText.includes("otp") &&
+      !lowerText.includes("tài khoản"))
+  ) {
+    const rawFallback = {
+      aiRiskLevel: "SAFE",
       muc_rui_ro: "Chưa thấy dấu hiệu rõ ràng" as const,
-      ket_luan_ngan: "Nội dung là trao đổi công việc/sinh hoạt thông thường, chưa thấy dấu hiệu lừa đảo hay rủi ro.",
+      ket_luan_ngan: "Chưa phát hiện dấu hiệu lừa đảo trong nội dung được cung cấp",
+      giai_thich: "Nội dung là trao đổi sinh hoạt/công việc thông thường, chưa thấy dấu hiệu lừa đảo hay rủi ro tài chính.",
       bang_chung_da_co: [
         {
-          noi_dung: text ? `Trích dẫn nội dung: "${text}"` : "Tin nhắn thông thường.",
+          noi_dung: text ? `Trích dẫn: "${text}"` : "Tin nhắn thông thường.",
           nguon: "tinh_huong_ban_dau" as const,
-          y_nghia: "Không có yêu cầu về tài chính, mật mã bảo mật hay liên kết độc hại.",
+          y_nghia: "Không có yêu cầu về tài chính, chuyển tiền, mã OTP hay liên kết độc hại.",
         },
       ],
       thong_tin_con_thieu: [],
       cau_hoi_bo_sung: [],
       ly_do_thay_doi_muc_rui_ro: "Không phát hiện yếu tố bất thường hay dấu hiệu trục lợi nào.",
-      hanh_dong_an_toan: [
-        "Trao đổi bình thường với người gửi.",
-        "Tiếp tục duy trì thói quen không gửi mật khẩu hoặc OTP qua tin nhắn.",
-      ],
       co_can_hoi_them: false,
       so_luot_da_hoi: so_luot_da_hoi,
-      cac_dau_hieu: ["Tin nhắn trao đổi thông thường."],
-      bang_chung: [text || "Tin nhắn nội dung lành mạnh."],
-      giai_thich: "Nội dung không chứa các mẫu câu dụ dỗ, đe dọa, đòi hỏi tài chính hay dẫn dụ tải phần mềm lạ.",
-      canh_bao_phong_ngua: "Nếu người gửi đột ngột thay đổi thái độ và nhờ chuyển tiền hộ, hãy gọi điện thoại trực tiếp để xác minh danh tính.",
-      viec_can_lam_ngay: ["Phản hồi công việc hoặc trao đổi bình thường."],
-      viec_khong_nen_lam: ["Không gửi mã OTP hoặc mật khẩu cá nhân."],
-      thong_tin_can_xac_minh: ["Xác minh qua cuộc gọi thoại thông thường nếu sau này có phát sinh vấn đề tài chính."],
+      cac_dau_hieu: [],
+      bang_chung: [text || "Tin nhắn thông thường."],
+      canh_bao_phong_ngua: "Nếu nội dung hoặc yêu cầu thay đổi, hãy kiểm tra lại trước khi thực hiện giao dịch.",
+      viec_can_lam_ngay: ["Nếu nội dung hoặc yêu cầu thay đổi, hãy kiểm tra lại trước khi thực hiện giao dịch."],
+      viec_khong_nen_lam: [],
+      thong_tin_can_xac_minh: [],
       tin_nhan_tu_choi_goi_y: "",
       cau_hoi_xac_minh_goi_y: "",
       noi_dung_gui_nguoi_than: "",
-      canh_bao_an_toan: "Luôn giữ nguyên tắc bảo vệ tài khoản và không chia sẻ mã bảo mật.",
+      canh_bao_an_toan: "Nếu nội dung hoặc yêu cầu thay đổi, hãy kiểm tra lại trước khi thực hiện giao dịch.",
     };
+    return mergeRuleRiskWithAiResult(techAnalysis, rawFallback);
   }
 
   // Police Inquiry with no explicit money demand yet
@@ -761,7 +947,7 @@ export function generateFallbackAnalysis(params: {
         "Chưa thể kiểm chứng độc lập danh tính người gửi và tính xác thực của thông tin.",
       ],
       cau_hoi_bo_sung: [],
-      ly_do_thay_doi_muc_rui_ro: "Sau 2 lượt hỏi, không phát hiện bằng chứng nguy hiểm rõ ràng nhưng chưa đủ dữ kiện để khẳng định an toàn tuyệt đối.",
+      ly_do_thay_doi_muc_rui_ro: "Sau 2 lượt hỏi, không phát hiện bằng chứng nguy hiểm rõ ràng nhưng chưa đủ dữ kiện để đưa ra kết luận an toàn hoàn toàn.",
       hanh_dong_an_toan: [
         "Chủ động liên hệ cơ quan/tổ chức liên quan qua số tổng đài chính thức.",
         "Không thực hiện chuyển tiền hay cung cấp thông tin bảo mật.",

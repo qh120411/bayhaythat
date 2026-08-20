@@ -130,7 +130,10 @@ export const AnalysisResult: React.FC<AnalysisResultProps> = ({
   const RiskIcon = getRiskIcon();
 
   return (
-    <section className="py-6 sm:py-8 px-4 max-w-5xl mx-auto space-y-6 animate-in fade-in duration-300">
+    <section
+      id="analysis-result-card"
+      className="py-6 sm:py-8 px-4 max-w-5xl mx-auto space-y-6 animate-in fade-in duration-300"
+    >
       {/* Preliminary Notice if this is Stage 1 instant warning */}
       {result.isPreliminary && (
         <div className="p-4 rounded-2xl bg-amber-500 text-slate-950 font-black flex items-center justify-between gap-3 shadow-lg animate-pulse">
@@ -286,7 +289,7 @@ export const AnalysisResult: React.FC<AnalysisResultProps> = ({
         )}
 
         {/* Actionable Safety Advice Rule Banner */}
-        {result.canh_bao_an_toan && (
+        {result.canh_bao_an_toan && canonicalLevel !== "SAFE" && (
           <div className="p-4 sm:p-5 rounded-2xl bg-slate-900 text-white space-y-1 shadow-md">
             <span className="text-xs font-black text-emerald-400 uppercase tracking-wider flex items-center gap-1.5">
               <ShieldCheck className="w-4 h-4" /> Nguyên tắc an toàn cốt lõi:
@@ -568,7 +571,7 @@ export const AnalysisResult: React.FC<AnalysisResultProps> = ({
       {/* ========================================================================= */}
       {/* 3. DO & DON'T COMPARISON GRID                                             */}
       {/* ========================================================================= */}
-      {result.viec_khong_nen_lam && result.viec_khong_nen_lam.length > 0 && (
+      {canonicalLevel !== "SAFE" && result.viec_khong_nen_lam && result.viec_khong_nen_lam.length > 0 && (
         <div className="p-6 sm:p-7 rounded-3xl bg-rose-50/70 border-2 border-rose-300 space-y-4 shadow-sm">
           <div className="flex items-center gap-2.5 text-rose-900">
             <XCircle className="w-6 h-6 text-rose-600 shrink-0" />

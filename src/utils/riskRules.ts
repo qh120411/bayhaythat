@@ -117,9 +117,13 @@ export function scanSevereDangerSigns(input: {
 
   // 5. Công an, tòa án, viện kiểm sát hoặc ngân hàng yêu cầu chuyển tiền
   const authorityDemandPattern =
-    /(?:(?:công an|cảnh sát|viện kiểm sát|tòa án|điều tra viên|cán bộ điều tra|thanh tra|ngân hàng|bộ công an)\s*.*?(?:yêu cầu|bắt|bảo|buộc|chuyển|nộp)\s+(?:tiền|vào tài khoản|tài khoản tạm giữ|tài khoản thanh tra|tiền bảo lãnh|chứng minh tài sản|bảo toàn|khắc phục))|(?:tài khoản tạm giữ|tài khoản thanh tra|tài khoản an toàn|chứng minh tài chính cho cơ quan điều tra)/i;
+    /(?:(?:công an|cảnh sát|viện kiểm sát|tòa án|điều tra viên|cán bộ điều tra|thanh tra|ngân hàng|bộ công an)\s*.*?(?:yêu cầu|bắt|bảo|buộc|chuyển|nộp)\s+(?:tiền|vào tài khoản|tài khoản tạm giữ|tài khoản thanh tra|tiền bảo lãnh|chứng minh tài sản|bảo toàn|khắc phục|\d+[\s\w]*(?:triệu|nghìn|k|tỷ|usd|vnd|đ|bảo lãnh)|bảo lãnh))|(?:tài khoản tạm giữ|tài khoản thanh tra|tài khoản an toàn|chứng minh tài chính cho cơ quan điều tra)/i;
 
-  if (authorityDemandPattern.test(combinedRaw) || ((lower.includes("công an") || lower.includes("viện kiểm sát") || lower.includes("tòa án")) && (lower.includes("chuyển tiền") || lower.includes("nộp tiền") || lower.includes("tài khoản tạm giữ")))) {
+  if (
+    authorityDemandPattern.test(combinedRaw) ||
+    ((lower.includes("công an") || lower.includes("viện kiểm sát") || lower.includes("tòa án")) &&
+      (lower.includes("chuyển tiền") || lower.includes("nộp tiền") || lower.includes("tài khoản tạm giữ") || lower.includes("bảo lãnh") || lower.includes("nộp")))
+  ) {
     const matchText = extractSnippet(authorityDemandPattern, text || "Cơ quan chức năng yêu cầu chuyển tiền từ xa");
     detectedSigns.push({
       id: "authority_money_demand",

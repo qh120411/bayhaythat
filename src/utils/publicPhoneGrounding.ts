@@ -522,15 +522,35 @@ LƯU Ý CỰC KỲ QUAN TRỌNG:
         httpOptions: { headers: { "User-Agent": "aistudio-build" } },
       });
 
-    // Use gemini-3.7-flash with Google Search Grounding tool enabled
-    const response = await ai.models.generateContent({
-      model: "gemini-3.7-flash",
-      contents: searchPrompt,
-      config: {
-        tools: [{ googleSearch: {} }],
-        temperature: 0.1,
-      },
-    });
+    // Use gemini-2.5-flash with fallback to gemini-3.7-flash
+    const candidateModels = ["gemini-2.5-flash", "gemini-3.7-flash"];
+    let response: any = null;
+    for (const modelName of candidateModels) {
+      try {
+        response = await ai.models.generateContent({
+          model: modelName,
+          contents: searchPrompt,
+          config: {
+            tools: [{ googleSearch: {} }],
+            temperature: 0.1,
+          },
+        });
+        if (response) break;
+      } catch (err: any) {
+        const errMsg = err?.message || String(err);
+        const isQuota = errMsg.includes("429") || errMsg.includes("RESOURCE_EXHAUSTED") || errMsg.includes("quota");
+        if (isQuota) {
+          console.warn(`[Search Grounding] Model ${modelName} rate limit/quota. Trying fallback model...`);
+          continue;
+        }
+        console.warn(`[Search Grounding] Model ${modelName} error: ${errMsg.slice(0, 100)}`);
+        continue;
+      }
+    }
+
+    if (!response) {
+      throw new Error("No Gemini models available for Search Grounding.");
+    }
 
     const responseText = response.text || "";
     let parsedJson: any = null;

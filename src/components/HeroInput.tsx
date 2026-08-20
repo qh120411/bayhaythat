@@ -27,6 +27,7 @@ import {
 import { InputMode, DemoScenario, IndicatorCheckResult } from "../types";
 import { DEMO_SCENARIOS } from "../data/scenarios";
 import { checkIndicator } from "../utils/indicatorLookup";
+import { sanitizeSensitiveData } from "../utils/privacySanitizer";
 
 interface HeroInputProps {
   isLargeFont: boolean;
@@ -192,9 +193,13 @@ export const HeroInput: React.FC<HeroInputProps> = ({
       return;
     }
 
+    const sanitizedText = textContent.trim()
+      ? sanitizeSensitiveData(textContent.trim()).sanitizedText
+      : "";
+
     onAnalyze({
       type: selectedMode,
-      text: textContent.trim(),
+      text: sanitizedText,
       imageBase64: imagePreview || undefined,
       imageMimeType: imagePreview ? imageMimeType : undefined,
       audioBase64: audioBase64 || undefined,

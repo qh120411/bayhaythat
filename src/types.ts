@@ -26,6 +26,30 @@ export type {
   PublicPhoneSearchResult,
 };
 
+export interface EvidenceSource {
+  type: "technical_rule" | "ai_inference" | "external_verified";
+  label: string;
+  sourceUrl?: string;
+  checkedAt?: string;
+  confidence: "low" | "medium" | "high";
+}
+
+export type CommunityStatus = "verified" | "not_found" | "unavailable";
+
+export interface CommunityReportResult {
+  status: CommunityStatus;
+  reportCount: number | null;
+  lastReportedAt: string | null;
+  sourceUrl: string | null;
+  checkedAt: string | null;
+}
+
+export interface ExtractedEvidence {
+  quote: string;
+  signal: string;
+  source: "user_input" | "technical_analysis" | "external_source";
+}
+
 export type RiskLevel =
   | "Chưa thấy dấu hiệu rõ ràng"
   | "Cần thận trọng"
@@ -153,10 +177,21 @@ export interface AnalysisResponse {
   bang_chung_da_co?: EvidenceItem[];
   thong_tin_con_thieu?: string[];
   cau_hoi_bo_sung?: FollowUpQuestion[];
+  followUpQuestions?: FollowUpQuestion[];
   ly_do_thay_doi_muc_rui_ro?: string;
   hanh_dong_an_toan?: string[];
   co_can_hoi_them?: boolean;
   so_luot_da_hoi?: number;
+
+  // Structured Evidence & Grounding
+  confidence?: "low" | "medium" | "high";
+  extractedEvidence?: ExtractedEvidence[];
+  uncertainClaims?: string[];
+  limitations?: string[];
+  evidenceSources?: EvidenceSource[];
+  communityReportResult?: CommunityReportResult;
+  isSanitized?: boolean;
+  sanitizedPreview?: string;
 
   // Systematic Technical Indicators Result
   technicalAnalysis?: TechnicalAnalysisData;

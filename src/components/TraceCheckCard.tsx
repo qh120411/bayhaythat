@@ -40,13 +40,15 @@ export const TraceCheckCard: React.FC<TraceCheckCardProps> = ({
       linkUrl: fallbackUrl,
     });
 
-  const hasReports = !!(activeTrace && activeTrace.hasReports && activeTrace.totalReportCount > 0);
-  const totalReports = activeTrace?.totalReportCount || 0;
-  const lastReported = activeTrace?.lastReportedText || "Chưa có";
+  const commStatus = activeTrace?.communityReportResult?.status || (activeTrace?.hasReports ? "verified" : "unavailable");
+  const isVerified = commStatus === "verified";
+  const isNotFound = commStatus === "not_found";
+  const isUnavailable = commStatus === "unavailable";
+
+  const totalReports = activeTrace?.totalReportCount;
   const searchedPhone = activeTrace?.searchedPhone || "Không có số điện thoại";
   const searchedCountry = activeTrace?.searchedCountryOrArea || "Không áp dụng";
   const searchedDomain = activeTrace?.searchedRealDomain || "Không có đường link";
-  const lookupStatus = activeTrace?.lookupStatusText || (isLoading ? "Đang truy vấn mạng lưới cảnh báo an toàn số..." : "Đã đối soát với cơ sở dữ liệu vi phạm.");
 
   return (
     <div
@@ -80,16 +82,20 @@ export const TraceCheckCard: React.FC<TraceCheckCardProps> = ({
         {/* Reputation Badge */}
         {traceResult && (
           <div>
-            {hasReports ? (
+            {isVerified && totalReports !== null && totalReports > 0 ? (
               <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-rose-100 border border-rose-300 text-rose-900 font-black text-xs sm:text-sm">
                 <ShieldAlert className="w-4 h-4 text-rose-600" />
                 <span>{totalReports} lượt báo cáo vi phạm</span>
               </span>
-            ) : (
-              /* CRITICAL: Neutral gray / slate badge, NEVER green */
+            ) : isNotFound ? (
               <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-100 border border-slate-300 text-slate-700 font-bold text-xs sm:text-sm">
                 <Info className="w-4 h-4 text-slate-500" />
-                <span>Chưa ghi nhận báo cáo</span>
+                <span>Đã kiểm tra nguồn xác thực</span>
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-100 border border-slate-300 text-slate-700 font-bold text-xs sm:text-sm">
+                <Info className="w-4 h-4 text-slate-500" />
+                <span>Nguồn phản ánh: Chưa kết nối</span>
               </span>
             )}
           </div>
@@ -137,19 +143,27 @@ export const TraceCheckCard: React.FC<TraceCheckCardProps> = ({
             <ShieldAlert className="w-3.5 h-3.5 text-slate-600" />
             <span>Số lượt báo cáo</span>
           </div>
-          <p className={`font-bold text-sm ${hasReports ? "text-rose-700 font-black text-base" : "text-slate-700"}`}>
-            {hasReports ? `${totalReports} lượt cảnh báo` : "0 lượt"}
+          <p className={`font-bold text-sm ${isVerified ? "text-rose-700 font-black text-base" : "text-slate-700"}`}>
+            {isVerified && totalReports !== null
+              ? `${totalReports} lượt cảnh báo`
+              : isNotFound
+              ? "0 lượt (nguồn đã kiểm tra)"
+              : "Không khả dụng"}
           </p>
         </div>
 
-        {/* 5. Lần báo cáo gần nhất */}
+        {/* 5. Nguồn đối soát & Thời điểm */}
         <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200 space-y-1">
           <div className="flex items-center gap-1.5 text-slate-500 text-xs font-bold uppercase tracking-wider">
             <Clock className="w-3.5 h-3.5 text-slate-600" />
-            <span>Lần báo cáo gần nhất</span>
+            <span>Nguồn đối soát & Thời điểm</span>
           </div>
           <p className="font-semibold text-slate-800 text-sm">
-            {lastReported}
+            {isVerified
+              ? activeTrace.communityReportResult?.lastReportedAt || activeTrace.lastReportedText || "Đã đối soát"
+              : isNotFound
+              ? "Đã đối soát nguồn chính thức"
+              : "Không áp dụng"}
           </p>
         </div>
 
@@ -160,16 +174,17 @@ export const TraceCheckCard: React.FC<TraceCheckCardProps> = ({
             <span>Trạng thái tra cứu</span>
           </div>
           <p className="font-semibold text-slate-800 text-xs leading-snug">
-            {lookupStatus}
+            {isVerified
+              ? `Phát hiện ${totalReports} lượt phản ánh và cảnh báo đã xác thực.`
+              : isNotFound
+              ? "Nguồn dữ liệu đã được kiểm tra và chưa ghi nhận báo cáo."
+              : "Chưa kết nối nguồn dữ liệu phản ánh cộng đồng đã được xác thực."}
           </p>
         </div>
       </div>
 
-      {/* No Data Notice or Active Threat Warning */}
-      {!hasReports ? (
-        /* MANDATORY REQUIREMENT: If no data, display exact text:
-           "Chưa có báo cáo cộng đồng — điều này không chứng minh đối tượng an toàn."
-           Never use green color! Use neutral gray / amber. */
+      {/* Community Status Banner */}
+      {isUnavailable ? (
         <div
           id="trace-no-data-notice"
           className="p-4 rounded-2xl bg-slate-100 border border-slate-300 text-slate-800 flex items-start gap-3 text-xs sm:text-sm font-semibold"
@@ -177,11 +192,28 @@ export const TraceCheckCard: React.FC<TraceCheckCardProps> = ({
           <AlertTriangle className="w-5 h-5 text-slate-600 shrink-0 mt-0.5" />
           <div className="space-y-0.5">
             <p className="font-bold text-slate-900">
-              Chưa có báo cáo cộng đồng — điều này không chứng minh đối tượng an toàn.
+              Lưu ý về nguồn dữ liệu phản ánh cộng đồng
             </p>
             <p className="text-[11px] text-slate-600 font-normal">
-              Các đối tượng lừa đảo thường xuyên thay đổi số điện thoại mới và tạo tên miền phụ liên tục chỉ trong vài giờ. Hãy luôn tuân thủ nguyên tắc bảo mật không cung cấp OTP hay chuyển tiền.
+              Các đối tượng lừa đảo thường xuyên thay đổi số điện thoại mới và tạo tên miền phụ liên tục chỉ trong vài giờ. Thiếu dữ liệu phản ánh không đồng nghĩa với an toàn.
             </p>
+          </div>
+        </div>
+      ) : isNotFound ? (
+        <div
+          id="trace-not-found-notice"
+          className="p-4 rounded-2xl bg-slate-100 border border-slate-300 text-slate-800 flex items-start gap-3 text-xs sm:text-sm font-semibold"
+        >
+          <Info className="w-5 h-5 text-slate-600 shrink-0 mt-0.5" />
+          <div className="space-y-0.5">
+            <p className="font-bold text-slate-900">
+              Nguồn dữ liệu đã được kiểm tra và chưa ghi nhận báo cáo.
+            </p>
+            {activeTrace.communityReportResult?.sourceUrl && (
+              <p className="text-[11px] text-slate-600 font-normal">
+                Nguồn đối soát: {activeTrace.communityReportResult.sourceUrl} | Thời điểm: {activeTrace.communityReportResult.checkedAt || "Hiện tại"}
+              </p>
+            )}
           </div>
         </div>
       ) : (
@@ -197,7 +229,7 @@ export const TraceCheckCard: React.FC<TraceCheckCardProps> = ({
 
           <div className="space-y-1.5 text-slate-800">
             {activeTrace.phoneItems
-              .filter((p) => p.reportCount > 0)
+              .filter((p) => p.reportCount !== null && p.reportCount > 0)
               .map((p, idx) => (
                 <div key={idx} className="p-2.5 rounded-xl bg-white border border-rose-200 flex items-center justify-between gap-2 flex-wrap">
                   <div>
@@ -214,7 +246,7 @@ export const TraceCheckCard: React.FC<TraceCheckCardProps> = ({
               ))}
 
             {activeTrace.domainItems
-              .filter((d) => d.reportCount > 0)
+              .filter((d) => d.reportCount !== null && d.reportCount > 0)
               .map((d, idx) => (
                 <div key={idx} className="p-2.5 rounded-xl bg-white border border-rose-200 flex items-center justify-between gap-2 flex-wrap">
                   <div>

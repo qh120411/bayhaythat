@@ -11,11 +11,11 @@ import {
 } from "./technicalAnalysis";
 import { performTraceCheckSync, THREAT_DATABASE } from "./reputationService";
 import { CanonicalRiskLevel } from "./riskConfig";
+import { CommunityStatus } from "../types";
 import {
   PublicPhoneSearchResult,
   OfficialPhoneMatch,
   ReferencePhoneMatch,
-  searchPhoneWithGoogleGrounding,
   normalizePhoneNumber,
   compareNormalizedPhoneNumbers,
   generatePhoneSearchVariants,
@@ -28,24 +28,34 @@ import {
 } from "./phoneLookupCache";
 
 // Whitelist of officially verified public domains & emergency hotlines for GREEN status
+// NOTE: "gov.vn" is a generic ccSLD, NOT a domain - NEVER whitelist "gov.vn" as a whole!
 export const VERIFIED_OFFICIAL_DOMAINS = [
-  "gov.vn",
+  "bocongan.gov.vn",
+  "cuccsgt.bocongan.gov.vn",
   "dichvucong.gov.vn",
   "chinhphu.vn",
   "baochinhphu.vn",
-  "bocongan.gov.vn",
+  "cand.com.vn",
   "congan.hanoi.gov.vn",
+  "congan.hochiminhcity.gov.vn",
+  "vneid.gov.vn",
+  "gdt.gov.vn",
   "mic.gov.vn",
   "aita.gov.vn",
   "vncert.vn",
   "ais.gov.vn",
+  "tinnhiemmang.vn",
+  "khonggianmang.vn",
   "sbv.gov.vn",
+  "moj.gov.vn",
+  "toaan.gov.vn",
+  "vksndtc.gov.vn",
+  "baohiemxahoi.gov.vn",
   "vietnamnet.vn",
   "vtv.vn",
   "vnexpress.net",
   "tuoitre.vn",
   "thanhnien.vn",
-  "cand.com.vn",
 ];
 
 export const VERIFIED_OFFICIAL_HOTLINES = [
@@ -69,7 +79,7 @@ export interface IndicatorPhoneDetail {
   isForeign: boolean;
   isOfficialVerified: boolean;
   hasReports: boolean;
-  reportCount: number;
+  reportCount: number | null;
   lastReportedAt: string | null;
   reputationCategory?: string;
   warningNote: string;
@@ -88,13 +98,16 @@ export interface IndicatorUrlDetail {
   registrableDomain: string;
   tld: string;
   isOfficialVerified: boolean;
+  isTyposquatting?: boolean;
+  typosquattingTarget?: string;
+  typosquattingReason?: string;
   hasDeceptivePath: boolean;
   deceptiveKeywordsInPath: string[];
   isSuspiciousTld: boolean;
   isDirectIp: boolean;
   isShortenedUrl: boolean;
   hasReports: boolean;
-  reportCount: number;
+  reportCount: number | null;
   lastReportedAt: string | null;
   reputationCategory?: string;
   explanation: string;
@@ -113,10 +126,13 @@ export interface IndicatorCheckResult {
   realDomainOrPrefix: string;
   notableSigns: string[];
   communityReports: {
+    status: CommunityStatus;
     hasReports: boolean;
-    reportCount: number;
+    reportCount: number | null;
     lastReportText: string;
     message: string;
+    sourceUrl: string | null;
+    checkedAt: string | null;
   };
   recommendedActions: string[];
   explanation: string;
@@ -129,17 +145,121 @@ export interface IndicatorCheckResult {
   groundingSearchMessage?: string;
 }
 
+// -----------------------------------------------------------------------------
+// Typosquatting / Lookalike Detection Engine
+// -----------------------------------------------------------------------------
+function levenshteinDistance(a: string, b: string): number {
+  const matrix: number[][] = [];
+  for (let i = 0; i <= b.length; i++) matrix[i] = [i];
+  for (let j = 0; j <= a.length; j++) matrix[0][j] = j;
+
+  for (let i = 1; i <= b.length; i++) {
+    for (let j = 1; j <= a.length; j++) {
+      if (b.charAt(i - 1) === a.charAt(j - 1)) {
+        matrix[i][j] = matrix[i - 1][j - 1];
+      } else {
+        matrix[i][j] = Math.min(
+          matrix[i - 1][j - 1] + 1,
+          matrix[i][j - 1] + 1,
+          matrix[i - 1][j] + 1
+        );
+      }
+    }
+  }
+  return matrix[b.length][a.length];
+}
+
+const HIGH_PROFILE_TARGETS = [
+  { domain: "bocongan.gov.vn", name: "Cổng Thông tin điện tử Bộ Công an (bocongan.gov.vn)", base: "bocongan" },
+  { domain: "dichvucong.gov.vn", name: "Cổng Dịch vụ công Quốc gia (dichvucong.gov.vn)", base: "dichvucong" },
+  { domain: "vneid.gov.vn", name: "Định danh điện tử VNeID (vneid.gov.vn)", base: "vneid" },
+  { domain: "chinhphu.vn", name: "Cổng Thông tin Chính phủ (chinhphu.vn)", base: "chinhphu" },
+  { domain: "baochinhphu.vn", name: "Báo Điện tử Chính phủ (baochinhphu.vn)", base: "baochinhphu" },
+  { domain: "cand.com.vn", name: "Báo Công an Nhân dân (cand.com.vn)", base: "cand" },
+  { domain: "gdt.gov.vn", name: "Tổng cục Thuế (gdt.gov.vn)", base: "gdt" },
+  { domain: "vietcombank.com.vn", name: "Ngân hàng Vietcombank", base: "vietcombank" },
+  { domain: "techcombank.com.vn", name: "Ngân hàng Techcombank", base: "techcombank" },
+  { domain: "mbbank.com.vn", name: "Ngân hàng MB Bank", base: "mbbank" },
+  { domain: "bidv.com.vn", name: "Ngân hàng BIDV", base: "bidv" },
+  { domain: "agribank.com.vn", name: "Ngân hàng Agribank", base: "agribank" },
+  { domain: "vpbank.com.vn", name: "Ngân hàng VPBank", base: "vpbank" },
+];
+
+/**
+ * Detects whether a domain is an intentional typosquatting or lookalike of official agencies.
+ */
+export function detectTyposquatting(hostname: string, registrableDomain: string): {
+  isTyposquatting: boolean;
+  targetOfficialDomain: string;
+  targetOrgName: string;
+  reason: string;
+} {
+  const normHost = hostname.toLowerCase().trim().replace(/:\d+$/, "");
+  const normDom = registrableDomain.toLowerCase().trim();
+
+  // If it's already an exact verified official domain or subdomain, not typosquatting
+  if (isVerifiedOfficialDomain(normDom, normHost)) {
+    return { isTyposquatting: false, targetOfficialDomain: "", targetOrgName: "", reason: "" };
+  }
+
+  const hostParts = normHost.split(".");
+  const domParts = normDom.split(".");
+  const hostMainLabel = domParts[0] || hostParts[0] || "";
+
+  for (const target of HIGH_PROFILE_TARGETS) {
+    const targetMainLabel = target.base;
+
+    // 1. Check exact base label with different non-official TLD (e.g., bocongan.vn, bocongan.com, bocongan.net)
+    if (
+      (hostMainLabel === targetMainLabel || normDom.includes(target.base)) &&
+      normDom !== target.domain &&
+      normHost !== target.domain &&
+      !normHost.endsWith("." + target.domain)
+    ) {
+      return {
+        isTyposquatting: true,
+        targetOfficialDomain: target.domain,
+        targetOrgName: target.name,
+        reason: `Tên miền '${normHost}' chứa từ khóa '${target.base}' nhưng không thuộc hệ thống tên miền chính thức '${target.domain}'.`,
+      };
+    }
+
+    // 2. Check Levenshtein distance on main label (e.g., "bocongann" vs "bocongan", "dichvucongg" vs "dichvucong")
+    const labelDist = levenshteinDistance(hostMainLabel, targetMainLabel);
+    if (labelDist >= 1 && labelDist <= 2 && Math.abs(hostMainLabel.length - targetMainLabel.length) <= 2) {
+      return {
+        isTyposquatting: true,
+        targetOfficialDomain: target.domain,
+        targetOrgName: target.name,
+        reason: `Tên miền '${normHost}' viết sai chính tả (cố ý thêm/đổi ký tự '${hostMainLabel}' so với '${targetMainLabel}') nhái theo ${target.name}.`,
+      };
+    }
+
+    // 3. Check Levenshtein distance on full hostname vs official domain
+    const fullDist = levenshteinDistance(normHost, target.domain);
+    if (fullDist >= 1 && fullDist <= 2) {
+      return {
+        isTyposquatting: true,
+        targetOfficialDomain: target.domain,
+        targetOrgName: target.name,
+        reason: `Tên miền '${normHost}' viết sai chính tả gần giống Cổng thông tin chính thức '${target.domain}'.`,
+      };
+    }
+  }
+
+  return { isTyposquatting: false, targetOfficialDomain: "", targetOrgName: "", reason: "" };
+}
+
 /**
  * Checks if a domain is officially verified as authentic Government or Top News portal.
  */
 export function isVerifiedOfficialDomain(registrableDomain: string, hostname?: string): boolean {
-  const normDom = registrableDomain.toLowerCase();
-  const normHost = (hostname || "").toLowerCase();
+  const normDom = registrableDomain.toLowerCase().trim();
+  const normHost = (hostname || "").toLowerCase().trim();
 
   return VERIFIED_OFFICIAL_DOMAINS.some(
     (official) =>
       normDom === official ||
-      normDom.endsWith("." + official) ||
       normHost === official ||
       normHost.endsWith("." + official)
   );
@@ -211,25 +331,26 @@ export function analyzePhoneNumber(phoneInput: string): IndicatorPhoneDetail {
   );
 
   const match = exactMatch || prefixMatch;
-  let reportCount = match ? match.reports : 0;
-  let lastReport = match ? match.lastReport : null;
+  let reportCount: number | null = match ? match.reports : null;
+  let lastReport: string | null = match ? match.lastReport : null;
   let category = match ? match.category : undefined;
 
   if (communityReport) {
-    reportCount = Math.max(reportCount, communityReport.reportCount);
+    reportCount = Math.max(reportCount || 0, communityReport.reportCount);
     lastReport = communityReport.lastReportedAt || lastReport;
     category = communityReport.categories.join(", ") || category;
   }
 
   if (officialWarning) {
-    reportCount = Math.max(reportCount, 1);
+    reportCount = Math.max(reportCount || 0, 1);
     lastReport = officialWarning.officialMatch.publishedAt || "Cảnh báo chính thức";
     category = officialWarning.officialMatch.incidentCategory || category;
   }
 
   if (!match && !communityReport && !officialWarning && phone.isForeign) {
-    reportCount = 15;
-    lastReport = "Ghi nhận gần đây";
+    // Technical rule signal only - reportCount is null
+    reportCount = null;
+    lastReport = null;
     category = "Đầu số quốc tế không rõ danh tính gọi đến Việt Nam";
   }
 
@@ -238,7 +359,7 @@ export function analyzePhoneNumber(phoneInput: string): IndicatorPhoneDetail {
     warningNote = `Số này từng xuất hiện trong cảnh báo chính thức của ${officialWarning.officialMatch.verifiedHostname} (${officialWarning.officialMatch.publishedAt}).`;
   } else if (isOfficial) {
     warningNote = "Số điện thoại thuộc danh sách tổng đài / cơ quan nhà nước chính thức đã được xác minh.";
-  } else if (reportCount > 0) {
+  } else if (reportCount !== null && reportCount > 0) {
     warningNote = `Đã có ${reportCount} lượt báo cáo phản ánh số này liên quan đến thủ đoạn lừa đảo / quấy rối.`;
   } else if (phone.isForeign) {
     warningNote = `Đầu số quốc tế (${phone.countryName}). Thận trọng cao độ nếu người gọi tự xưng cơ quan công quyền Việt Nam.`;
@@ -254,7 +375,7 @@ export function analyzePhoneNumber(phoneInput: string): IndicatorPhoneDetail {
     isVietnam: phone.isVietnam,
     isForeign: phone.isForeign,
     isOfficialVerified: isOfficial,
-    hasReports: reportCount > 0,
+    hasReports: reportCount !== null && reportCount > 0,
     reportCount,
     lastReportedAt: lastReport,
     reputationCategory: category,
@@ -291,8 +412,9 @@ export function analyzeUrl(urlStr: string): IndicatorUrlDetail {
   };
 
   const isOfficial = isVerifiedOfficialDomain(u.registrableDomain, u.hostname);
+  const typosquatting = !isOfficial ? detectTyposquatting(u.hostname, u.registrableDomain) : { isTyposquatting: false, targetOfficialDomain: "", targetOrgName: "", reason: "" };
 
-  // Match with threat database
+  // Match with verified threat database
   const match = THREAT_DATABASE.find(
     (t) =>
       t.type === "domain" &&
@@ -301,25 +423,25 @@ export function analyzeUrl(urlStr: string): IndicatorUrlDetail {
         u.hostname.endsWith("." + t.pattern))
   );
 
-  let reportCount = match ? match.reports : 0;
-  let lastReport = match ? match.lastReport : null;
+  let reportCount: number | null = match ? match.reports : null;
+  let lastReport: string | null = match ? match.lastReport : null;
   let category = match ? match.category : undefined;
 
-  if (!match) {
+  if (typosquatting.isTyposquatting) {
+    category = `Giả mạo tên miền (Typosquatting) nhái ${typosquatting.targetOrgName}`;
+  } else if (!match) {
     if (u.hasDeceptivePath) {
-      reportCount = 85;
-      lastReport = "Hôm nay";
       category = "Tên miền ngụy trang đường dẫn cơ quan nhà nước (.gov/dichvucong)";
     } else if (u.isSuspiciousTld) {
-      reportCount = 32;
-      lastReport = "Ghi nhận gần đây";
-      category = `Tên miền đuôi rủi ro cao (.${u.tld})`;
+      category = "Tên miền có đuôi thường bị lạm dụng trong các chiến dịch ngắn hạn. Đây là tín hiệu kỹ thuật, không phải bằng chứng tên miền đã bị báo cáo.";
     }
   }
 
   let explanation = u.explanation;
   if (isOfficial) {
-    explanation = `Tên miền ${u.registrableDomain} thuộc cổng thông tin / dịch vụ đã được xác minh chính thức.`;
+    explanation = `Tên miền ${u.registrableDomain} thuộc cổng thông tin / dịch vụ của cơ quan chính thức đã được xác minh.`;
+  } else if (typosquatting.isTyposquatting) {
+    explanation = typosquatting.reason;
   } else if (u.hasDeceptivePath) {
     explanation = `Tên miền thật là '${u.registrableDomain}'. Phần '${u.deceptiveKeywordsInPath.join("/")}' chỉ là đường dẫn ngụy trang trong thư mục web để đánh lừa người dùng.`;
   } else if (u.isDirectIp) {
@@ -339,12 +461,15 @@ export function analyzeUrl(urlStr: string): IndicatorUrlDetail {
     registrableDomain: u.registrableDomain,
     tld: u.tld,
     isOfficialVerified: isOfficial,
+    isTyposquatting: typosquatting.isTyposquatting,
+    typosquattingTarget: typosquatting.targetOfficialDomain,
+    typosquattingReason: typosquatting.reason,
     hasDeceptivePath: u.hasDeceptivePath,
     deceptiveKeywordsInPath: u.deceptiveKeywordsInPath,
     isSuspiciousTld: u.isSuspiciousTld,
     isDirectIp: u.isDirectIp,
     isShortenedUrl: u.isShortenedUrl,
-    hasReports: reportCount > 0,
+    hasReports: reportCount !== null && reportCount > 0,
     reportCount,
     lastReportedAt: lastReport,
     reputationCategory: category,
@@ -376,10 +501,13 @@ export function checkIndicator(input: string): IndicatorCheckResult {
       realDomainOrPrefix: "Chưa có",
       notableSigns: ["Chưa cung cấp thông tin đầu vào."],
       communityReports: {
+        status: "unavailable",
         hasReports: false,
-        reportCount: 0,
+        reportCount: null,
         lastReportText: "Chưa có",
         message: "Chưa có dữ liệu tra cứu.",
+        sourceUrl: null,
+        checkedAt: null,
       },
       recommendedActions: ["Nhập số điện thoại (ví dụ: 0393767942) hoặc đường link để tra cứu."],
       explanation: "Hệ thống hỗ trợ tra cứu số điện thoại đối soát với cảnh báo Bộ Công an và cơ quan nhà nước.",
@@ -476,25 +604,29 @@ export function checkIndicator(input: string): IndicatorCheckResult {
 
   const hasOfficialDomain = urlDetails.some((u) => u.isOfficialVerified);
   const hasOfficialPhone = phoneDetails.some((p) => p.isOfficialVerified);
+  const hasTyposquatting = urlDetails.some((u) => u.isTyposquatting);
   const isEntirelyOfficial =
     (hasOfficialDomain || hasOfficialPhone) &&
     !hasOfficialWarningMatch &&
+    !hasTyposquatting &&
     !urlDetails.some((u) => u.hasDeceptivePath || u.hasReports) &&
     !phoneDetails.some((p) => p.isForeign || p.hasReports);
 
   const hasCriticalUrl = urlDetails.some(
-    (u) => u.hasDeceptivePath || (u.hasReports && u.reportCount >= 50) || u.isDirectIp
+    (u) => u.isTyposquatting || u.hasDeceptivePath || (u.hasReports && (u.reportCount || 0) >= 50) || u.isDirectIp
   );
   const hasCriticalPhone = phoneDetails.some(
-    (p) => p.hasReports && p.reportCount >= 50
+    (p) => p.hasReports && (p.reportCount || 0) >= 50
   );
   const hasForeignPhone = phoneDetails.some((p) => p.isForeign);
   const hasSuspiciousUrl = urlDetails.some((u) => u.isSuspiciousTld || u.isShortenedUrl || u.hasReports);
   const hasAnyReports = phoneDetails.some((p) => p.hasReports) || urlDetails.some((u) => u.hasReports);
 
-  const totalReports =
-    phoneDetails.reduce((sum, p) => sum + p.reportCount, 0) +
-    urlDetails.reduce((sum, u) => sum + u.reportCount, 0);
+  const hasAnyKnownReport = phoneDetails.some((p) => p.reportCount !== null) || urlDetails.some((u) => u.reportCount !== null);
+  const totalReports = hasAnyKnownReport
+    ? phoneDetails.reduce((sum, p) => sum + (p.reportCount || 0), 0) +
+      urlDetails.reduce((sum, u) => sum + (u.reportCount || 0), 0)
+    : null;
 
   const notableSigns: string[] = [];
   const recommendedActions: string[] = [];
@@ -518,6 +650,25 @@ export function checkIndicator(input: string): IndicatorCheckResult {
     recommendedActions.push("Chặn ngay số điện thoại này trên ứng dụng Danh bạ / Cuộc gọi của bạn.");
     recommendedActions.push("Tuyệt đối không chuyển tiền, không đọc mã OTP và không cài đặt ứng dụng theo lời yêu cầu.");
     recommendedActions.push("Xem chi tiết bài viết cảnh báo gốc tại nút [Xem nguồn] bên dưới để nắm rõ thủ đoạn.");
+  } else if (hasTyposquatting) {
+    // 🚨 TYPOSQUATTING / LOOKALIKE DOMAIN (RED)
+    const typoDetail = urlDetails.find((u) => u.isTyposquatting);
+    warningLevel = "RED";
+    riskBadgeLabel = "Nguy hiểm rõ ràng";
+    riskTitle = "Phát hiện tên miền giả mạo / Nhái cơ quan chính thức (Typosquatting)";
+    themeColor = "rose";
+
+    notableSigns.push(
+      `🚨 DẤU HIỆU GIẢ MẠO TÊN MIỀN (Typosquatting): ${typoDetail?.typosquattingReason || "Tên miền viết sai chính tả nhái theo cơ quan chính thức."}`
+    );
+    notableSigns.push(
+      `Tên miền thật bạn nhập là "${typoDetail?.registrableDomain}", hoàn toàn KHÔNG PHẢI là cổng thông tin chính thức "${typoDetail?.typosquattingTarget}".`
+    );
+    notableSigns.push("Kẻ gian cố tình đăng ký tên miền gần giống (sai 1-2 ký tự) để lừa người dùng đăng nhập tài khoản hoặc cài mã độc.");
+
+    recommendedActions.push("Không truy cập, không mở đường link và không điền bất kỳ thông tin nào.");
+    recommendedActions.push("Nếu đã nhập mật khẩu/mã OTP trên trang này: Hãy lập tức đổi mật khẩu và liên hệ cơ quan/ngân hàng để tạm khóa tài khoản.");
+    recommendedActions.push("Chỉ truy cập cổng thông tin chính thức đã được công bố trên các phương tiện truyền thông của Nhà nước.");
   } else if (isEntirelyOfficial && !hasCriticalUrl && !hasForeignPhone) {
     // 🟢 GREEN
     warningLevel = "GREEN";
@@ -544,14 +695,14 @@ export function checkIndicator(input: string): IndicatorCheckResult {
     if (urlDetails.some((u) => u.isDirectIp)) {
       notableSigns.push("Đường link dùng địa chỉ IP trần, hành vi điển hình của máy chủ phát tán mã độc / phishing.");
     }
-    if (totalReports > 0) {
+    if (totalReports !== null && totalReports > 0) {
       notableSigns.push(`Cơ sở dữ liệu cộng đồng ghi nhận ${totalReports} lượt báo cáo lừa đảo liên quan.`);
     }
 
     recommendedActions.push("Không gọi lại, không trả lời, không mở đường link và không cung cấp thông tin cá nhân.");
     recommendedActions.push("Chặn ngay số điện thoại / người gửi tin nhắn này trên thiết bị.");
     recommendedActions.push("Nếu đã bấm vào link và nhập thông tin: Lập tức đổi mật khẩu và liên hệ ngân hàng khóa thẻ.");
-  } else if (hasForeignPhone || hasSuspiciousUrl || totalReports >= 15) {
+  } else if (hasForeignPhone || hasSuspiciousUrl || (totalReports !== null && totalReports >= 15)) {
     // 🟠 ORANGE (Rủi ro cao)
     warningLevel = "ORANGE";
     riskBadgeLabel = "Rủi ro cao";
@@ -614,10 +765,25 @@ export function checkIndicator(input: string): IndicatorCheckResult {
     urlDetails.find((u) => u.lastReportedAt)?.lastReportedAt ||
     "Chưa có";
 
+  const communityStatus: CommunityStatus =
+    totalReports !== null && totalReports > 0
+      ? "verified"
+      : totalReports === 0
+      ? "not_found"
+      : "unavailable";
+
   const communityMessage =
-    totalReports > 0
+    communityStatus === "verified"
       ? `Phát hiện ${totalReports} lượt phản ánh vi phạm từ mạng lưới an toàn thông tin.`
-      : "Chưa có báo cáo cộng đồng về đối tượng này. Điều đó không chứng minh đối tượng an toàn.";
+      : communityStatus === "not_found"
+      ? "Nguồn dữ liệu đã được kiểm tra và chưa ghi nhận báo cáo."
+      : "Chưa kết nối nguồn dữ liệu phản ánh cộng đồng đã được xác thực.";
+
+  const threatMatch = THREAT_DATABASE.find(
+    (t) =>
+      (urlDetails.length > 0 && t.type === "domain" && urlDetails.some((u) => u.registrableDomain.toLowerCase() === t.pattern.toLowerCase())) ||
+      (phoneDetails.length > 0 && t.type === "phone" && phoneDetails.some((p) => p.raw.includes(t.pattern) || p.normalized.includes(t.pattern)))
+  );
 
   return {
     status: hasOfficialWarningMatch
@@ -636,10 +802,13 @@ export function checkIndicator(input: string): IndicatorCheckResult {
     realDomainOrPrefix,
     notableSigns,
     communityReports: {
-      hasReports: totalReports > 0,
+      status: communityStatus,
+      hasReports: communityStatus === "verified",
       reportCount: totalReports,
       lastReportText,
       message: communityMessage,
+      sourceUrl: threatMatch?.sourceUrl || null,
+      checkedAt: threatMatch ? (threatMatch.lastReport || "2026-03-01") : null,
     },
     recommendedActions,
     explanation,
@@ -697,10 +866,13 @@ export function enrichIndicatorWithGrounding(
     ];
 
     enriched.communityReports = {
+      status: "verified",
       hasReports: true,
-      reportCount: Math.max(baseResult.communityReports.reportCount, 1),
+      reportCount: Math.max(baseResult.communityReports.reportCount || 0, 1),
       lastReportText: topOfficial.publishedAt || "Cảnh báo chính thức",
       message: `Từng xuất hiện trong cảnh báo chính thức của ${topOfficial.verifiedHostname}.`,
+      sourceUrl: topOfficial.sourceUrl || `https://${topOfficial.verifiedHostname}`,
+      checkedAt: topOfficial.publishedAt || new Date().toISOString(),
     };
 
     if (enriched.phones && enriched.phones.length > 0) {

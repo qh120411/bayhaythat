@@ -88,8 +88,37 @@ describe("Systematic Technical Indicators Analysis", () => {
     });
 
     expect(trace.hasReports).toBe(false);
-    expect(trace.totalReportCount).toBe(0);
+    expect(trace.totalReportCount).toBeNull();
     expect(trace.reputationRisk).toBe("SAFE");
-    expect(trace.lookupStatusText).toContain("Chưa có bản ghi báo cáo trùng khớp");
+    expect(trace.lookupStatusText).toContain("Chưa kết nối nguồn dữ liệu phản ánh cộng đồng");
+  });
+
+  it("should classify benign daily message as SAFE with correct labels and gentle safety advice", () => {
+    const text = "Mẹ ơi, tối nay con về trễ khoảng 15 phút. Cơm ở trong nồi nhé.";
+    const tech = runTechnicalAnalysis({
+      text,
+      linkUrl: "",
+    });
+
+    expect(tech.scoring.totalScore).toBeLessThan(20);
+    expect(tech.scoring.scoreBreakdown.length).toBe(0);
+    expect(tech.phoneAnalysis.hasPhone).toBe(false);
+    expect(tech.urlAnalysis.hasUrl).toBe(false);
+    expect(tech.contentAnalysis.hasPaymentOrMoneyDemand).toBe(false);
+    expect(tech.contentAnalysis.hasOtpOrCredentialsDemand).toBe(false);
+    expect(tech.contentAnalysis.hasAppDownloadOrRemoteAccess).toBe(false);
+
+    const merged = mergeRuleRiskWithAiResult(tech, {
+      aiRiskLevel: "SAFE",
+      giai_thich: "Tin nhắn sinh hoạt gia đình bình thường, không có dấu hiệu lừa đảo.",
+    });
+
+    expect(merged.finalRiskLevel).toBe("SAFE");
+    expect(merged.badgeLabel).toBe("Chưa thấy dấu hiệu rủi ro rõ ràng");
+    expect(merged.ket_luan_ngan).toBe("Chưa phát hiện dấu hiệu lừa đảo trong nội dung được cung cấp");
+    expect(merged.viec_can_lam_ngay).toEqual([
+      "Nếu nội dung hoặc yêu cầu thay đổi, hãy kiểm tra lại trước khi thực hiện giao dịch.",
+    ]);
+    expect(merged.viec_khong_nen_lam).toEqual([]);
   });
 });

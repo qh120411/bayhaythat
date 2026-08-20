@@ -75,8 +75,8 @@ export interface CanonicalRiskUIDefinition {
 export const CANONICAL_RISK_UI: Record<CanonicalRiskLevel, CanonicalRiskUIDefinition> = {
   SAFE: {
     level: "SAFE",
-    badgeLabel: "Chưa thấy dấu hiệu nguy hiểm rõ ràng",
-    fixedTitle: "Chưa phát hiện dấu hiệu nguy hiểm trong nội dung đã cung cấp",
+    badgeLabel: "Chưa thấy dấu hiệu rủi ro rõ ràng",
+    fixedTitle: "Chưa phát hiện dấu hiệu lừa đảo trong nội dung được cung cấp",
     vietnameseLevel: "Chưa thấy dấu hiệu rõ ràng",
     statusLine: "Mức độ an toàn: Chưa thấy dấu hiệu bất thường",
     themeColor: "emerald",
@@ -89,14 +89,11 @@ export const CANONICAL_RISK_UI: Record<CanonicalRiskLevel, CanonicalRiskUIDefini
     icon: ShieldCheck,
     iconColor: "text-emerald-600",
     cardBorder: "border-emerald-200",
-    corePrinciple: "Vẫn nên duy trì nguyên tắc an toàn: Không bao giờ cung cấp mã OTP hay chuyển tiền cho người lạ.",
+    corePrinciple: "Nếu nội dung hoặc yêu cầu thay đổi, hãy kiểm tra lại trước khi thực hiện giao dịch.",
     defaultActions: [
-      "Kiểm tra lại nội dung nếu có bất kỳ yêu cầu tài chính hoặc đường link phát sinh sau này.",
-      "Lưu lại số hotline 156 hoặc liên hệ người thân khi gặp tình huống nghi ngờ.",
+      "Nếu nội dung hoặc yêu cầu thay đổi, hãy kiểm tra lại trước khi thực hiện giao dịch.",
     ],
-    defaultAvoidActions: [
-      "Không gửi thông tin nhạy cảm (mật khẩu, mã OTP, số thẻ CCCD/ngân hàng) nếu đối phương bất ngờ yêu cầu sau này.",
-    ],
+    defaultAvoidActions: [],
   },
   VERIFY: {
     level: "VERIFY",

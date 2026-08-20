@@ -15,6 +15,7 @@ import { runTechnicalAnalysis, mergeRuleRiskWithAiResult } from "./utils/technic
 import { performTraceCheck } from "./utils/reputationService";
 import { checkIndicator, enrichIndicatorWithGrounding } from "./utils/indicatorLookup";
 import { maxRisk, mapCanonicalToLegacyVietnamese } from "./utils/riskConfig";
+import { sanitizeSensitiveData } from "./utils/privacySanitizer";
 import { AlertTriangle, ShieldCheck, Lock, RotateCcw } from "lucide-react";
 
 interface InitialInputState {
@@ -88,6 +89,12 @@ export default function App() {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 20000); // 20s max timeout
 
+    // Sanitize sensitive credentials (CCCD, OTP, Card numbers) client-side before sending across the wire
+    const sanitizedData = {
+      ...data,
+      text: data.text ? sanitizeSensitiveData(data.text).sanitizedText : data.text,
+    };
+
     // Tác vụ 1 (Chính)
     const mainTaskPromise = (async () => {
       const response = await fetch("/api/analyze", {
@@ -96,7 +103,7 @@ export default function App() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          ...data,
+          ...sanitizedData,
           so_luot_da_hoi: 0,
         }),
         signal: controller.signal,
@@ -134,8 +141,13 @@ export default function App() {
         resultData.muc_rui_ro === "Rủi ro cao" ||
         resultData.muc_rui_ro === "Rủi ro rất cao";
 
+      const hasQuestions =
+        (Array.isArray(resultData.cau_hoi_bo_sung) && resultData.cau_hoi_bo_sung.length > 0) ||
+        (Array.isArray(resultData.followUpQuestions) && resultData.followUpQuestions.length > 0);
+
       if (
         (resultData.co_can_hoi_them || resultData.needsMoreInformation) &&
+        hasQuestions &&
         !isSevere
       ) {
         setShowGuidedFlow(true);
@@ -152,7 +164,7 @@ export default function App() {
         const res = await fetch("/api/trace-check", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text: data.text || "", linkUrl: data.linkUrl || "" }),
+          body: JSON.stringify({ text: sanitizedData.text || "", linkUrl: sanitizedData.linkUrl || "" }),
         });
         if (res.ok) {
           return (await res.json()) as TraceCheckResult;
@@ -160,7 +172,7 @@ export default function App() {
       } catch (err) {
         console.warn("Trace check fetch error, running local fallback:", err);
       }
-      return await performTraceCheck({ text: data.text || "", linkUrl: data.linkUrl || "" });
+      return await performTraceCheck({ text: sanitizedData.text || "", linkUrl: sanitizedData.linkUrl || "" });
     })()
       .then((traceData) => {
         setTraceResult(traceData);
@@ -225,6 +237,11 @@ export default function App() {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 25000);
 
+    const sanitizedInitialInput = {
+      ...initialInput,
+      text: initialInput.text ? sanitizeSensitiveData(initialInput.text).sanitizedText : initialInput.text,
+    };
+
     try {
       const response = await fetch("/api/analyze", {
         method: "POST",
@@ -232,11 +249,11 @@ export default function App() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          ...initialInput,
+          ...sanitizedInitialInput,
           existingEvidence: analysisResult.bang_chung_da_co || [],
           previousQuestionsAndAnswers: accumulatedQA,
           newAnswers,
-          extraNote,
+          extraNote: extraNote ? sanitizeSensitiveData(extraNote).sanitizedText : extraNote,
           so_luot_da_hoi: currentTurn,
         }),
         signal: controller.signal,
@@ -422,6 +439,7 @@ export default function App() {
         activeTab={activeTab}
         onSelectTab={(tab) => {
           setActiveTab(tab);
+          setErrorMessage(null);
           if (tab === "practice") {
             setAnalysisResult(null);
             setIndicatorResult(null);
@@ -434,8 +452,8 @@ export default function App() {
 
       {/* Main Content Area */}
       <main className="flex-1 flex flex-col justify-start pb-12">
-        {/* Global Error Banner if any */}
-        {errorMessage && (
+        {/* Error Banner ONLY on check tab */}
+        {activeTab === "check" && errorMessage && (
           <div className="max-w-4xl mx-auto px-4 mt-4 w-full">
             <div className="p-5 rounded-2xl bg-rose-50 border-2 border-rose-300 text-rose-950 text-sm space-y-3 shadow-md">
               <div className="flex items-center justify-between gap-3">
@@ -563,7 +581,7 @@ export default function App() {
           </div>
         </div>
         <p className="mt-3 text-[11px] text-slate-500 max-w-3xl mx-auto leading-relaxed">
-          Dữ liệu phân tích tức thời trong bộ nhớ RAM, không lưu nhật ký hay thông tin cá nhân. Thông tin tham khảo đối chiếu theo khuyến cáo của Bộ Công An (A05) và Cục An toàn thông tin (Bộ TT&TT).
+          Dữ liệu phân tích tức thời trong bộ nhớ RAM, không lưu nhật ký hay thông tin cá nhân. Tham khảo khuyến cáo từ Bộ Công an, VNCERT và các cổng thông tin chính thức của cơ quan nhà nước.
         </p>
       </footer>
 
